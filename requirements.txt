@@ -1,0 +1,4 @@
+# BID — Python dependencies
+# Install with: pip install -r requirements.txt
+
+Pillow>=10.0.0
