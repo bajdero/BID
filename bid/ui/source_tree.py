@@ -52,6 +52,11 @@ class SourceTree(tk.Frame):
         self.source_tree.tag_configure(SourceState.NEW,        background="light gray")
         self.source_tree.tag_configure(SourceState.PROCESSING, background="sky blue")
         self.source_tree.tag_configure(SourceState.OK,         background="pale green")
+        self.source_tree.tag_configure(
+            SourceState.OK_OLD,    
+            background="#c8e6c9",   # jeszcze bledszy zielony / miętowy
+            foreground="#2e7d32",   # ciemniejszy zielony tekst
+        )
         self.source_tree.tag_configure(SourceState.ERROR,      background="coral")
         self.source_tree.tag_configure(
             SourceState.DELETED,
@@ -86,7 +91,7 @@ class SourceTree(tk.Frame):
         Args:
             source_dict: Słownik zdjęć z source_manager.
         """
-        for folder, photos in source_dict.items():
+        for folder, photos in list(source_dict.items()):
             count_label = f"{len(photos)} zdjęć"
             try:
                 self.source_tree.insert(
@@ -96,7 +101,7 @@ class SourceTree(tk.Frame):
                 # Folder już istnieje — tylko aktualizujemy licznik
                 self.source_tree.item(folder, values=(count_label,))
 
-            for file, meta in photos.items():
+            for file, meta in list(photos.items()):
                 try:
                     self.source_tree.insert(
                         folder,

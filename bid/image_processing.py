@@ -7,11 +7,19 @@ from __future__ import annotations
 
 import io
 import logging
-from typing import Literal
+from functools import lru_cache
+from typing import Literal, Any
 
 from PIL import Image, ImageCms, ExifTags
 
 logger = logging.getLogger("Yapa_CM")
+
+
+@lru_cache(maxsize=32)
+def get_logo(logo_path: str) -> Image.Image:
+    """Wczytuje i cache'uje logo."""
+    logger.debug(f"Wczytuję logo (cache miss): {logo_path}")
+    return Image.open(logo_path).convert("RGBA")
 
 
 # ---------------------------------------------------------------------------
@@ -127,7 +135,7 @@ def apply_watermark(
     """
     logger.debug(f"Nakładam watermark z {logo_path}")
 
-    full_logo: Image.Image = Image.open(logo_path).convert("RGBA")
+    full_logo = get_logo(logo_path)
     logo = image_resize(full_logo, size, resamle=Image.NEAREST)
     logo = image_change_alpha(logo, opacity)
 
@@ -144,6 +152,169 @@ def apply_watermark(
     result = Image.alpha_composite(result, base_rgba)
     result = Image.alpha_composite(result, logo_layer)
     return result.convert("RGB")
+
+
+# ---------------------------------------------------------------------------
+# Worker Task for Parallel Processing
+# ---------------------------------------------------------------------------
+
+def process_photo_task(
+    photo_path: str,
+    folder_name: str,
+    photo_name: str,
+    created_date: str,
+    export_folder: str,
+    export_settings: dict,
+    existing_exports: dict,
+) -> dict:
+    """Przetwarza jedno zdjęcie (wszystkie warianty) w osobnym procesie.
+
+    Returns:
+        Słownik z wynikami: {success, exported, duration, error_msg}.
+    """
+    import os
+    import time
+    import datetime
+    from PIL import Image
+
+    start_time = time.perf_counter()
+    now = datetime.datetime.now()
+    # Explicit types to satisfy strict linters if needed
+    results: dict[str, Any] = {
+        "success": True, 
+        "exported": {}, 
+        "duration": 0.0, 
+        "error_msg": None
+    }
+
+    try:
+        # ---- Wczytywanie ----
+        try:
+            raw_photo = Image.open(photo_path)
+        except Exception as exc:
+            results["success"] = False
+            results["error_msg"] = f"Błąd otwarcia pliku '{photo_path}': {exc}"
+            return results
+
+        # ---- EXIF ----
+        try:
+            exif = exif_clean_from_tiff(raw_photo.getexif())
+        except Exception as exc:
+            results["success"] = False
+            results["error_msg"] = f"Błąd odczytu EXIF '{photo_path}': {exc}"
+            return results
+
+        # Standardowe pola EXIF
+        exif[0x0001] = "R98"
+        exif[0x00FE] = 0x1
+        exif[0x0106] = 2
+        exif[0x0112] = 0
+        exif[0x013B] = folder_name.encode("utf-8")
+        exif[0xC71B] = now.strftime("%Y:%m:%d %H:%M:%S")
+
+        orientation = "landscape" if raw_photo.width >= raw_photo.height else "portrait"
+
+        # ---- Eksport dla każdego delivery ----
+        for deliver, d_cfg in export_settings.items():
+            # Optymalizacja: jeśli plik już istnieje, pomijamy ten wariant
+            existing_path = existing_exports.get(deliver)
+            if existing_path and os.path.isfile(existing_path):
+                results["exported"][deliver] = existing_path
+                continue
+
+            # Check ratio
+            ratios = d_cfg.get("ratio")
+            if ratios is not None:
+                actual = round(raw_photo.width / raw_photo.height, 2)
+                if actual not in ratios:
+                    continue
+
+            # Skalowanie
+            try:
+                resized = image_resize(
+                    raw_photo,
+                    d_cfg["size"],
+                    method=d_cfg.get("size_type", "longer"),
+                )
+            except Exception as exc:
+                results["success"] = False
+                results["error_msg"] = f"Błąd skalowania w {deliver}: {exc}"
+                return results
+
+            exif[256] = resized.width
+            exif[257] = resized.height
+
+            # Konwersja przestrzeni barwowej
+            try:
+                img_conv = image_convert_to_srgb(resized)
+            except Exception as exc:
+                results["success"] = False
+                results["error_msg"] = f"Błąd konwersji sRGB w {deliver}: {exc}"
+                return results
+
+            # Watermark / logo
+            # Zakładamy że logo.png jest w folderze nadrzędnym względem zdjęcia?
+            # Nie, w BID logo.png jest w folderze sesji.
+            # folder_name to nazwa folderu sesji.
+            # photo_path to pełna ścieżka.
+            logo_path = os.path.join(os.path.dirname(photo_path), "logo.png")
+            logo_cfg = d_cfg["logo"][orientation]
+            try:
+                final_img = apply_watermark(
+                    base=img_conv,
+                    logo_path=logo_path,
+                    size=logo_cfg["size"],
+                    opacity=logo_cfg["opacity"],
+                    x_offset=logo_cfg["x_offset"],
+                    y_offset=logo_cfg["y_offset"],
+                )
+            except Exception as exc:
+                results["success"] = False
+                results["error_msg"] = f"Błąd nakładania logo w {deliver}: {exc}"
+                return results
+
+            # Nazwa pliku eksportu
+            created_tag = created_date.replace(" ", "_").replace(":", "-")
+            orig_stem = os.path.splitext(photo_name)[0]
+            folder_tag = folder_name.replace(" ", "_")
+            export_name = f"YAPA{created_tag}_{folder_tag}_{orig_stem}"
+
+            # Zapis
+            fmt = d_cfg["format"]
+            try:
+                if fmt == "JPEG":
+                    ext = ".jpg"
+                    save_args = {"format": "JPEG", "optimize": True, "quality": d_cfg["quality"]}
+                elif fmt == "PNG":
+                    ext = ".png"
+                    from PIL.PngImagePlugin import PngInfo
+                    png_meta = PngInfo()
+                    png_meta.add_text("Artist", folder_name)
+                    png_meta.add_text("OriginalRawFileName", photo_name)
+                    png_meta.add_text("DocumentName", "YAPA")
+                    png_meta.add_text("ImageDescription", "YAPA")
+                    png_meta.add_text("DateTimeOriginal", created_date)
+                    png_meta.add_text("PreviewDateTime", now.strftime("%Y:%m:%d %H:%M:%S"))
+                    save_args = {"format": "PNG", "optimize": True, "compress_level": d_cfg["quality"], "pnginfo": png_meta}
+                else:
+                    raise ValueError(f"Nieznany format eksportu: {fmt!r}")
+
+                export_path = os.path.join(export_folder, deliver, export_name + ext)
+                final_img.save(export_path, **save_args, exif=exif.tobytes() if fmt == "JPEG" else None)
+                results["exported"][deliver] = export_path
+
+            except Exception as exc:
+                results["success"] = False
+                results["error_msg"] = f"Błąd zapisu w {deliver}: {exc}"
+                return results
+
+        results["duration"] = round(time.perf_counter() - start_time, 4)
+        return results
+
+    except Exception as exc:
+        results["success"] = False
+        results["error_msg"] = f"Nieoczekiwany błąd: {exc}"
+        return results
 
 
 # ---------------------------------------------------------------------------

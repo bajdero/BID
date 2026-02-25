@@ -26,6 +26,7 @@ class SourceState:
     NEW        = "new"
     PROCESSING = "processing"
     OK         = "ok"
+    OK_OLD     = "ok_old"    # znaleziono istniejące eksporty (np. po odbudowie bazy)
     ERROR      = "error"
     DELETED    = "deleted"   # plik źródłowy usunięty z dysku
 
@@ -41,35 +42,6 @@ def _source_dict_path(project_dir: Path) -> Path:
 # ---------------------------------------------------------------------------
 # Tworzenie/aktualizacja słownika
 # ---------------------------------------------------------------------------
-
-def create_source_item(root: str, folder_name: str, file: str) -> dict:
-    """Tworzy wpis słownika dla jednego zdjęcia.
-
-    Odczytuje EXIF w trybie leniwym (bez dekodowania pikseli).
-
-    Args:
-        root:        Pełna ścieżka do katalogu zawierającego plik.
-        folder_name: Nazwa folderu (= nazwa autora/sesji).
-        file:        Nazwa pliku.
-
-    Returns:
-        Słownik z kluczami: path, state, exported, size, created.
-    """
-    file_path = os.path.normpath(os.path.join(root, file))
-    stats = os.stat(file_path)
-    size_str = f"{stats.st_size / 1_024_000:.2f} MB"
-
-    created = _read_created_date(file_path, folder_name, file, stats)
-
-    return {
-        "path":     file_path,
-        "state":    SourceState.NEW,
-        "exported": {},
-        "size":     size_str,
-        "created":  created,
-        "mtime":    stats.st_mtime,   # czas modyfikacji — do wykrywania zmian
-    }
-
 
 def _read_created_date(
     file_path: str,
@@ -114,11 +86,93 @@ def _read_created_date(
     ).strftime("%Y:%m:%d %H:%M:%S")
 
 
-def create_source_dict(source_folder: str) -> dict:
+def create_source_item(
+    root: str, 
+    folder_name: str, 
+    file: str,
+    export_folder: str | None = None,
+    export_settings: dict | None = None,
+) -> dict:
+    """Tworzy wpis słownika dla jednego zdjęcia.
+
+    Args:
+        root:        Pełna ścieżka do katalogu zawierającego plik.
+        folder_name: Nazwa folderu (= nazwa autora/sesji).
+        file:        Nazwa pliku.
+        export_folder:   Główny folder eksportów (do sprawdzania istniejących).
+        export_settings: Konfiguracja exportu.
+
+    Returns:
+        Słownik z kluczami: path, state, exported, size, created.
+    """
+    file_path = os.path.normpath(os.path.join(root, file))
+    stats = os.stat(file_path)
+    size_str = f"{stats.st_size / 1_024_000:.2f} MB"
+
+    created = _read_created_date(file_path, folder_name, file, stats)
+    
+    # Domyślny stan
+    state = SourceState.NEW
+    exported_data = {}
+
+    # Jeśli odbudowujemy bazę — sprawdź czy eksporty już są
+    if export_folder and export_settings:
+        all_match = True
+        temp_exported = {}
+        
+        created_tag = created.replace(" ", "_").replace(":", "-")
+        orig_stem = os.path.splitext(file)[0]
+        folder_tag = folder_name.replace(" ", "_")
+        export_base_name = f"YAPA{created_tag}_{folder_tag}_{orig_stem}"
+        
+        # Otwieramy obraz tylko jeśli musimy sprawdzić ratio (bo jakieś eksporty brakuje)
+        img_for_ratio = None
+        try:
+            for deliver, d_cfg in export_settings.items():
+                ext = ".jpg" if d_cfg["format"] == "JPEG" else ".png"
+                exp_path = os.path.normpath(os.path.join(export_folder, deliver, export_base_name + ext))
+                if os.path.isfile(exp_path):
+                    temp_exported[deliver] = exp_path
+                else:
+                    # Sprawdź czy ten wariant w ogóle powinien istnieć (ratio)
+                    ratios = d_cfg.get("ratio")
+                    if ratios:
+                        if img_for_ratio is None:
+                            img_for_ratio = Image.open(file_path)
+                        actual_ratio = round(img_for_ratio.width / img_for_ratio.height, 2)
+                        if actual_ratio not in ratios:
+                            # Ignorujemy brak — i tak byśmy go pominęli
+                            continue
+                    all_match = False
+        finally:
+            if img_for_ratio:
+                img_for_ratio.close()
+        
+        exported_data = temp_exported
+        if all_match and temp_exported:
+            state = SourceState.OK_OLD
+
+    return {
+        "path":     file_path,
+        "state":    state,
+        "exported": exported_data,
+        "size":     size_str,
+        "created":  created,
+        "mtime":    stats.st_mtime,
+    }
+
+
+def create_source_dict(
+    source_folder: str,
+    export_folder: str | None = None,
+    export_settings: dict | None = None,
+) -> dict:
     """Skanuje folder źródłowy i buduje słownik zdjęć.
 
     Args:
         source_folder: Ścieżka do głównego folderu z podfolderami sesji.
+        export_folder:   Opcjonalna ścieżka do eksportów (wykrywanie OK_OLD).
+        export_settings: Opcjonalne ustawienia eksportów.
 
     Returns:
         Słownik: {folder_name: {file_name: source_item}}.
@@ -136,16 +190,25 @@ def create_source_dict(source_folder: str) -> dict:
         for file in files:
             if file == "logo.png":
                 continue
-            output[folder_name][file] = create_source_item(root, folder_name, file)
+            output[folder_name][file] = create_source_item(
+                root, folder_name, file, export_folder, export_settings
+            )
     return output
 
 
-def update_source_dict(source_dict: dict, source_folder: str) -> tuple[dict, bool]:
+def update_source_dict(
+    source_dict: dict, 
+    source_folder: str,
+    export_folder: str | None = None,
+    export_settings: dict | None = None,
+) -> tuple[dict, bool]:
     """Aktualizuje istniejący słownik o nowe foldery i pliki.
 
     Args:
         source_dict:    Aktualny słownik zdjęć.
         source_folder:  Ścieżka do głównego folderu źródłowego.
+        export_folder:  Opcjonalna ścieżka do eksportów.
+        export_settings: Opcjonalne ustawienia eksportów.
 
     Returns:
         Krotka (zaktualizowany słownik, flaga czy znaleziono nowe pliki).
@@ -170,7 +233,7 @@ def update_source_dict(source_dict: dict, source_folder: str) -> tuple[dict, boo
                 logger.info(f"Nowy plik: '{folder_name}/{file}'")
                 found_new = True
                 source_dict[folder_name][file] = create_source_item(
-                    root, folder_name, file
+                    root, folder_name, file, export_folder, export_settings
                 )
 
     return source_dict, found_new
@@ -213,7 +276,7 @@ def check_integrity(
             state = meta.get("state", SourceState.NEW)
 
             # Pomijamy stany tymczasowe / już oznaczone
-            if state in (SourceState.PROCESSING, SourceState.DELETED):
+            if state in (SourceState.PROCESSING, SourceState.DELETED, SourceState.OK_OLD):
                 continue
 
             src_path = meta.get("path", "")
@@ -281,15 +344,26 @@ def save_source_dict(source_dict: dict, project_dir: Path) -> None:
 def load_source_dict(project_dir: Path) -> dict | None:
     """Wczytuje słownik z pliku JSON, jeśli istnieje.
 
+    Obsługuje błędy formatu JSON (korupcja pliku).
+
     Args:
         project_dir: Katalog projektu.
 
     Returns:
-        Słownik zdjęć lub ``None``, gdy plik nie istnieje.
+        Słownik zdjęć lub ``None``, gdy plik nie istnieje lub jest uszkodzony.
     """
     path = _source_dict_path(project_dir)
-    if path.is_file():
-        logger.info("Wczytuję istniejący source_dict.json")
+    if not path.is_file():
+        return None
+
+    logger.info("Wczytuję istniejący source_dict.json")
+    try:
         with open(path, "r", encoding="utf-8") as fh:
             return json.load(fh)
-    return None
+    except json.JSONDecodeError as exc:
+        logger.error(f"Plik source_dict.json jest uszkodzony (JSON error): {exc}")
+        logger.error("Baza zostanie odbudowana na podstawie skanowania dysku.")
+        return None
+    except Exception as exc:
+        logger.error(f"Błąd krytyczny podczas wczytywania source_dict.json: {exc}")
+        return None
