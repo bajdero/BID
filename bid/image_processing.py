@@ -349,6 +349,55 @@ def exif_clean_from_tiff(exif: Image.Exif) -> Image.Exif:
     return exif
 
 
+def get_all_exif(img: Image.Image) -> dict[str, str]:
+    """Wyciąga wszystkie możliwe tagi EXIF w formie czytelnych dla człowieka stringów.
+
+    Args:
+        img: Obraz PIL.
+
+    Returns:
+        Słownik {tag_name: value_string}.
+    """
+    metadata = {}
+    try:
+        exif_data = img.getexif()
+        if not exif_data:
+            return {}
+
+        # Root tags
+        for tag_id, value in exif_data.items():
+            tag_name = ExifTags.TAGS.get(tag_id, tag_id)
+            if isinstance(value, bytes):
+                try:
+                    value = value.decode("utf-8", "ignore")
+                except:
+                    value = str(value)
+            metadata[str(tag_name)] = str(value)
+
+        # Sub-IFDs (ExifOffset, GPSInfo, etc.)
+        for ifd_id in [ExifTags.IFD.Exif, ExifTags.IFD.GPSInfo, ExifTags.IFD.Interop]:
+            try:
+                ifd = exif_data.get_ifd(ifd_id)
+                for tag_id, value in ifd.items():
+                    if ifd_id == ExifTags.IFD.GPSInfo:
+                        tag_name = ExifTags.GPSTAGS.get(tag_id, tag_id)
+                    else:
+                        tag_name = ExifTags.TAGS.get(tag_id, tag_id)
+
+                    if isinstance(value, bytes):
+                        try:
+                            value = value.decode("utf-8", "ignore")
+                        except:
+                            value = str(value)
+                    metadata[str(tag_name)] = str(value)
+            except:
+                pass
+    except Exception as exc:
+        logger.warning(f"Błąd ekstrakcji EXIF: {exc}")
+
+    return metadata
+
+
 # ---------------------------------------------------------------------------
 # Pomocnicze (debug)
 # ---------------------------------------------------------------------------

@@ -19,6 +19,7 @@ from concurrent.futures import ProcessPoolExecutor, Future
 from pathlib import Path
 
 import tkinter as tk
+from tkinter import ttk
 from PIL.PngImagePlugin import PngInfo
 
 from bid import config as cfg_module
@@ -38,6 +39,7 @@ from bid.source_manager import (
 )
 from bid.ui.preview import PrevWindow
 from bid.ui.source_tree import SourceTree
+from bid.ui.details_panel import DetailsPanel
 
 logger = logging.getLogger("Yapa_CM")
 
@@ -94,17 +96,45 @@ class MainApp(tk.Tk):
         save_source_dict(self.source_dict, PROJECT_DIR)
 
         # ----------------------------------------------------------------
-        # UI
+        # UI — Układ główny
         # ----------------------------------------------------------------
-        self.source_prev = PrevWindow(self)
-        self.source_prev.grid(column=0, row=0)
+        # Pasek menu
+        self._build_main_menu()
 
-        self.source_tree = SourceTree(self)
-        self.source_tree.grid(column=0, row=1)
+        # Główny kontener
+        main_container = ttk.Frame(self)
+        main_container.pack(fill=tk.BOTH, expand=True)
+
+        # Previews (Góra)
+        preview_frame = ttk.Frame(main_container)
+        preview_frame.pack(side=tk.TOP, fill=tk.X, padx=5, pady=5)
+        
+        self.source_prev = PrevWindow(preview_frame)
+        self.source_prev.pack(side=tk.LEFT, padx=5)
+        
+        self.export_prev = PrevWindow(preview_frame)
+        self.export_prev.pack(side=tk.LEFT, padx=5)
+
+        # Tree + Details (Dół)
+        content_frame = ttk.Frame(main_container)
+        content_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=5, pady=5)
+
+        self.source_tree = SourceTree(content_frame, self)
+        self.source_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         self.source_tree.update_tree(self.source_dict)
 
-        self.export_prev = PrevWindow(self)
-        self.export_prev.grid(column=1, row=0)
+        self.details_panel = DetailsPanel(content_frame, self)
+        self.details_panel.pack(side=tk.RIGHT, fill=tk.Y, padx=(10, 0))
+
+        # Pasek stanu / Progress (Dół)
+        self.status_bar = ttk.Frame(self, relief=tk.SUNKEN, padding=(2, 2))
+        self.status_bar.pack(side=tk.BOTTOM, fill=tk.X)
+
+        self.status_label = ttk.Label(self.status_bar, text="Gotowy")
+        self.status_label.pack(side=tk.LEFT, padx=5)
+
+        self.progress_bar = ttk.Progressbar(self.status_bar, orient=tk.HORIZONTAL, length=200, mode='determinate')
+        self.progress_bar.pack(side=tk.RIGHT, padx=5)
 
         # ----------------------------------------------------------------
         # Stan przetwarzania
@@ -120,6 +150,24 @@ class MainApp(tk.Tk):
         self.update_source()
         self.scan_photos()
 
+    def _build_main_menu(self) -> None:
+        """Tworzy pasek menu głównego."""
+        menubar = tk.Menu(self)
+        
+        # Plik
+        file_menu = tk.Menu(menubar, tearoff=0)
+        file_menu.add_command(label="Aktualizuj listę (Scan source)", command=self.update_source)
+        file_menu.add_separator()
+        file_menu.add_command(label="Wyjście", command=self.quit)
+        menubar.add_cascade(label="Plik", menu=file_menu)
+
+        # Akcje
+        action_menu = tk.Menu(menubar, tearoff=0)
+        action_menu.add_command(label="Rozpocznij eksport", command=self.scan_photos)
+        menubar.add_cascade(label="Akcje", menu=action_menu)
+
+        self.config(menu=menubar)
+
     # ================================================================
     # Przetwarzanie zdjęć
     # ================================================================
@@ -127,6 +175,18 @@ class MainApp(tk.Tk):
     def scan_photos(self) -> None:
         """Uruchamia przetwarzanie nowych zdjęć w puli procesów."""
         with self.dict_lock:
+            # Policz zdjęcia do przetworzenia dla paska postępu
+            total_new = sum(1 for f in self.source_dict for p in self.source_dict[f] 
+                            if self.source_dict[f][p]["state"] == SourceState.NEW)
+            
+            if total_new > 0:
+                self.progress_bar["maximum"] = total_new
+                self.progress_bar["value"] = 0
+                self.status_label.config(text=f"Przetwarzanie... (Pozostało: {total_new})")
+            else:
+                self.status_label.config(text="Wszystko aktualne")
+                self.progress_bar["value"] = 0
+
             if len(self.active_scanning) >= self.max_workers:
                 return
 
@@ -199,6 +259,14 @@ class MainApp(tk.Tk):
         
         logger.debug(f"[PERF] Zdjęcie {folder}/{photo} przetworzone w {result['duration']:.4f}s")
         self.source_tree.change_tag(folder, photo, SourceState.OK)
+
+        # Aktualizacja postępu
+        self.progress_bar["value"] += 1
+        remaining = self.progress_bar["maximum"] - self.progress_bar["value"]
+        if remaining > 0:
+            self.status_label.config(text=f"Przetwarzanie... (Pozostało: {int(remaining)})")
+        else:
+            self.status_label.config(text="Zakończono przetwarzanie")
 
     # Te funkcje są teraz zastąpione przez logic w image_processing.py i pool executor
     # def process_photo(self, folder: str, photo: str) -> None: ...

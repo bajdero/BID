@@ -1,10 +1,10 @@
-# Windows — setup.bat
-# Tworzy środowisko wirtualne i instaluje zależności.
-# Uruchom jeden raz przed pierwszym użyciem aplikacji.
-#
-# Windows — setup.bat
-# Creates a virtual environment and installs dependencies.
-# Run once before the first use of the application.
+:: Windows — setup.bat
+:: Tworzy środowisko wirtualne i instaluje zależności.
+:: Uruchom jeden raz przed pierwszym użyciem aplikacji.
+::
+:: Windows — setup.bat
+:: Creates a virtual environment and installs dependencies.
+:: Run once before the first use of the application.
 
 @echo off
 echo [BID] Tworzenie srodowiska wirtualnego (venv)...

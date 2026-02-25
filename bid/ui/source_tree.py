@@ -11,6 +11,10 @@ import _tkinter
 import tkinter as tk
 from tkinter import ttk
 
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from bid.app import MainApp
+
 from bid.source_manager import SourceState
 
 logger = logging.getLogger("Yapa_CM")
@@ -27,12 +31,13 @@ class SourceTree(tk.Frame):
         - deleted:    ciemnoszary    → plik źródłowy usunięty z dysku
     """
 
-    def __init__(self, root: tk.Tk) -> None:
+    def __init__(self, parent: tk.Widget, root: MainApp) -> None:
         """
         Args:
-            root: Okno nadrzędne (MainApp).
+            parent: Widget nadrzędny (np. Frame).
+            root:   Instancja MainApp (tk.Tk).
         """
-        super().__init__(root)
+        super().__init__(parent)
         self.root = root
 
         self.source_tree = ttk.Treeview(
@@ -61,11 +66,20 @@ class SourceTree(tk.Frame):
         self.source_tree.tag_configure(
             SourceState.DELETED,
             background="#d0d0d0",     # szary tło
-            foreground="#888888",     # przyciemniony tekst — sygnalizuje brak pliku
+            foreground="#888888",     # przyciemniony tekst
+        )
+        self.source_tree.tag_configure(
+            SourceState.SKIP,
+            background="#ffebee",     # bardzo lekki czerwony/różowy
+            foreground="#b71c1c",     # ciemnoczerwony tekst
         )
 
         self.source_tree.bind("<Double-1>", self._on_double_click)
-        self.source_tree.pack()
+        self.source_tree.bind("<<TreeviewSelect>>", self._on_select)
+        self.source_tree.bind("<Button-3>", self._show_context_menu)
+        self.source_tree.pack(fill=tk.BOTH, expand=True)
+
+        self._build_context_menu()
 
     # ------------------------------------------------------------------
     # Publiczne API
@@ -125,22 +139,70 @@ class SourceTree(tk.Frame):
     # ------------------------------------------------------------------
 
     def _on_double_click(self, event: tk.Event) -> None:
-        """Obsługa podwójnego kliknięcia — ładuje podgląd zdjęcia.
-
-        Args:
-            event: Zdarzenie tkinter.
-        """
+        """Obsługa podwójnego kliknięcia — ładuje podgląd zdjęcia."""
         tree: ttk.Treeview = event.widget
-        try:
-            selected = tree.selection()
-            if not selected:
-                return
-            path = tree.item(selected[0])["values"][-1]
-            # Aktualizacja podglądu w wątku pomocniczym, żeby nie blokować UI
-            Thread(
-                target=self.root.source_prev.change_img,
-                args=(str(path),),
-                daemon=True,
-            ).start()
-        except (_tkinter.TclError, IndexError) as exc:
-            logger.error(f"Błąd wyboru elementu w drzewie: {exc}")
+        selected = tree.selection()
+        if not selected:
+            return
+        item_id = selected[0]
+        if "_" not in item_id:
+            return
+            
+        path = tree.item(item_id)["values"][-1]
+        Thread(
+            target=self.root.source_prev.change_img,
+            args=(str(path),),
+            daemon=True,
+        ).start()
+
+    def _on_select(self, event: tk.Event) -> None:
+        """Obsługa wyboru elementu — aktualizuje panel szczegółów."""
+        tree: ttk.Treeview = event.widget
+        selected = tree.selection()
+        if not selected:
+            return
+        
+        item_id = selected[0]
+        # Sprawdzamy czy to plik (ma folder w ID)
+        if "_" not in item_id:
+            return
+            
+        folder, photo = item_id.split("_", 1)
+        meta = self.root.source_dict.get(folder, {}).get(photo)
+        if meta and hasattr(self.root, "details_panel"):
+            self.root.details_panel.update_details(folder, photo, meta)
+
+    def _build_context_menu(self) -> None:
+        """Tworzy menu kontekstowe."""
+        self.context_menu = tk.Menu(self, tearoff=0)
+        self.context_menu.add_command(label="Rerun all / Przetwórz ponownie", command=self._rerun_selected)
+        self.context_menu.add_command(label="Skip / Pomiń (Delete from list)", command=self._skip_selected)
+        self.context_menu.add_separator()
+        self.context_menu.add_command(label="Refresh / Odśwież", command=lambda: self.root.update_source())
+
+    def _show_context_menu(self, event: tk.Event) -> None:
+        """Wyświetla menu kontekstowe pod kursorem."""
+        item = self.source_tree.identify_row(event.y)
+        if item:
+            self.source_tree.selection_set(item)
+            self.context_menu.post(event.x_root, event.y_root)
+
+    def _rerun_selected(self) -> None:
+        """Resetuje stan wybranego zdjęcia do NEW."""
+        selected = self.source_tree.selection()
+        if not selected or "_" not in selected[0]:
+            return
+        folder, photo = selected[0].split("_", 1)
+        self.root.source_dict[folder][photo]["state"] = SourceState.NEW
+        self.root.source_dict[folder][photo]["exported"] = {}
+        self.change_tag(folder, photo, SourceState.NEW)
+        self.root.scan_photos()
+
+    def _skip_selected(self) -> None:
+        """Oznacza wybrane zdjęcie jako SKIP."""
+        selected = self.source_tree.selection()
+        if not selected or "_" not in selected[0]:
+            return
+        folder, photo = selected[0].split("_", 1)
+        self.root.source_dict[folder][photo]["state"] = SourceState.SKIP
+        self.change_tag(folder, photo, SourceState.SKIP)

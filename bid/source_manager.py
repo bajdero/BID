@@ -16,7 +16,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from bid.image_processing import exif_clean_from_tiff
+from bid.image_processing import exif_clean_from_tiff, get_all_exif
 
 logger = logging.getLogger("Yapa_CM")
 
@@ -29,6 +29,7 @@ class SourceState:
     OK_OLD     = "ok_old"    # znaleziono istniejące eksporty (np. po odbudowie bazy)
     ERROR      = "error"
     DELETED    = "deleted"   # plik źródłowy usunięty z dysku
+    SKIP       = "skip"      # użytkownik ręcznie pominął plik
 
 
 # ---------------------------------------------------------------------------
@@ -43,13 +44,13 @@ def _source_dict_path(project_dir: Path) -> Path:
 # Tworzenie/aktualizacja słownika
 # ---------------------------------------------------------------------------
 
-def _read_created_date(
+def _read_metadata(
     file_path: str,
     folder_name: str,
     file: str,
     stats: os.stat_result,
-) -> str:
-    """Próbuje odczytać datę z EXIF; fallback na czas modyfikacji pliku.
+) -> tuple[str, dict]:
+    """Próbuje odczytać datę i wszystkie tagi z EXIF; fallback na czas modyfikacji pliku.
 
     Args:
         file_path:   Pełna ścieżka do pliku.
@@ -58,32 +59,35 @@ def _read_created_date(
         stats:       Wynik os.stat (do fallbacku).
 
     Returns:
-        Data jako string w formacie ``'YYYY:MM:DD HH:MM:SS'``.
+        Krotka (data_str, exif_dict).
     """
+    default_date = datetime.datetime.fromtimestamp(
+        int(stats.st_mtime), datetime.timezone.utc
+    ).strftime("%Y:%m:%d %H:%M:%S")
+    
     try:
         with Image.open(file_path) as img:
             exif = img.getexif()
+            full_exif = get_all_exif(img)
+            
+            created = None
+            if exif:
+                # Próba odczytu DateTimeOriginal (0x9003) z korzenia lub bloku IFD
+                for getter in (
+                    lambda e: e[0x9003],
+                    lambda e: e.get_ifd(34665)[0x9003],
+                ):
+                    try:
+                        created = getter(exif)
+                        break
+                    except (KeyError, Exception):
+                        pass
+            
+            return created or default_date, full_exif
+            
     except Exception as exc:
         logger.error(f"Cannot open image for EXIF: {folder_name}/{file} — {exc}")
-        return datetime.datetime.fromtimestamp(
-            int(stats.st_mtime), datetime.timezone.utc
-        ).strftime("%Y:%m:%d %H:%M:%S")
-
-    if exif:
-        # Próba odczytu DateTimeOriginal (0x9003) z korzenia lub bloku IFD
-        for getter in (
-            lambda e: e[0x9003],
-            lambda e: e.get_ifd(34665)[0x9003],
-        ):
-            try:
-                return getter(exif)
-            except (KeyError, Exception):
-                pass
-        logger.warning(f"No DateTimeOriginal in EXIF: {folder_name}/{file}")
-
-    return datetime.datetime.fromtimestamp(
-        int(stats.st_mtime), datetime.timezone.utc
-    ).strftime("%Y:%m:%d %H:%M:%S")
+        return default_date, {}
 
 
 def create_source_item(
@@ -109,7 +113,7 @@ def create_source_item(
     stats = os.stat(file_path)
     size_str = f"{stats.st_size / 1_024_000:.2f} MB"
 
-    created = _read_created_date(file_path, folder_name, file, stats)
+    created, exif_dict = _read_metadata(file_path, folder_name, file, stats)
     
     # Domyślny stan
     state = SourceState.NEW
@@ -139,11 +143,22 @@ def create_source_item(
                     if ratios:
                         if img_for_ratio is None:
                             img_for_ratio = Image.open(file_path)
-                        actual_ratio = round(img_for_ratio.width / img_for_ratio.height, 2)
-                        if actual_ratio not in ratios:
-                            # Ignorujemy brak — i tak byśmy go pominęli
+                        
+                        w, h = img_for_ratio.size
+                        ratio = round(w / h, 2)
+                        
+                        match = False
+                        for r_min, r_max in ratios:
+                            if r_min <= ratio <= r_max:
+                                match = True
+                                break
+                        if not match:
                             continue
+                    
                     all_match = False
+            
+        except Exception as exc:
+            logger.error(f"Błąd sprawdzania OK_OLD dla {folder_name}/{file}: {exc}")
         finally:
             if img_for_ratio:
                 img_for_ratio.close()
@@ -159,6 +174,7 @@ def create_source_item(
         "size":     size_str,
         "created":  created,
         "mtime":    stats.st_mtime,
+        "exif":     exif_dict,
     }
 
 

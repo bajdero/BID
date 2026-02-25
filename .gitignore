@@ -12,6 +12,8 @@ ENV/
 
 # Application runtime files
 source_dict.json
+settings.json
+export_option.json  
 logs/
 
 # IDE / editor
