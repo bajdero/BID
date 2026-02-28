@@ -71,6 +71,13 @@ def _parse_args() -> argparse.Namespace:
         help="Ścieżka do pliku export_option.json (domyślnie: obok main.py)",
     )
     parser.add_argument(
+        "--project",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help="Ścieżka do katalogu projektu (domyślnie: ostatnio używany)",
+    )
+    parser.add_argument(
         "--debug",
         action="store_true",
         help="Włącz poziom logowania DEBUG",
@@ -86,22 +93,37 @@ if __name__ == "__main__":
     logger.info("Uruchamianie BID")
 
     # Importy po skonfigurowaniu loggera
-    from bid.config import PROJECT_DIR
+    from bid.project_manager import ProjectManager
     from bid.ui.setup_wizard import run_wizard_if_needed
+    from bid.ui.project_selector import run_project_selector
     from bid.app import MainApp
 
-    # Ustalanie ścieżek konfiguracji (tak samo jak w bid.config)
-    s_path = args.settings if args.settings else PROJECT_DIR / "settings.json"
-    e_path = args.export_options if args.export_options else PROJECT_DIR / "export_option.json"
+    project_path: Path | None = args.project
 
-    # Uruchomienie kreatora jeśli brakuje plików
-    if not run_wizard_if_needed(s_path, e_path):
-        logger.info("Anulowano konfigurację. Zamykanie.")
-        sys.exit(0)
+    # Jeśli nie podano projektu w argumentach, otwórz selector
+    if project_path is None:
+        success, create_new, selected_path = run_project_selector()
+        
+        if not success:
+            logger.info("Nie wybrano projektu. Zamykanie.")
+            sys.exit(0)
+            
+        if create_new:
+            success_wizard, project_path = run_wizard_if_needed()
+            if not success_wizard or not project_path:
+                logger.info("Anulowano tworzenie projektu. Zamykanie.")
+                sys.exit(0)
+        else:
+            project_path = selected_path
 
-    app = MainApp(
-        settings_path=args.settings,
-        export_options_path=args.export_options,
-    )
+    # Podwójne sprawdzenie czy projekt istnieje (np. jeśli podany przez --project)
+    if project_path is None or not project_path.exists():
+        logger.error(f"Projekt nie istnieje: {project_path}")
+        success_wizard, project_path = run_wizard_if_needed()
+        if not success_wizard or not project_path:
+            logger.info("Anulowano konfigurację. Zamykanie.")
+            sys.exit(0)
+
+    app = MainApp(project_path=project_path, debug=args.debug)
     app.mainloop()
     logger.info("Zamknięto aplikację")

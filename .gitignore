@@ -11,9 +11,11 @@ env/
 ENV/
 
 # Application runtime files
+projects/
+recent_projects.json
 source_dict.json
 settings.json
-export_option.json  
+export_option.json
 logs/
 
 # IDE / editor
@@ -29,8 +31,8 @@ Thumbs.db
 desktop.ini
 
 # Test artefacts
-*.tif
-*.tiff
+test/exiftool-13.51_64
+test/source
 test.*
 export_test_*
 

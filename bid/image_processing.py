@@ -358,42 +358,194 @@ def get_all_exif(img: Image.Image) -> dict[str, str]:
     Returns:
         Słownik {tag_name: value_string}.
     """
+    from PIL.TiffImagePlugin import IFDRational
+
+    def format_value(val: Any) -> str | None:
+        """Konwertuje wartość EXIF na czytelny string lub None jeśli nieczytelne."""
+        if val is None:
+            return ""
+        if isinstance(val, (int, float, str)):
+            return str(val).strip("\ufeff \t\n\r")
+        if isinstance(val, IFDRational):
+            if val.denominator == 0:
+                return "0"
+            # Specjalna obsługa dla czasu naświetlania (ułamki)
+            if val.numerator < val.denominator and val.numerator != 0:
+                return f"{val.numerator}/{val.denominator}"
+            # Jeśli to liczba całkowita (np. 300/1), zwróć jako int
+            if val.numerator % val.denominator == 0:
+                return str(int(val.numerator / val.denominator))
+            # W przeciwnym razie float z rozsądną precyzją
+            return str(round(float(val), 4))
+        if isinstance(val, bytes):
+            try:
+                # Próba dekodowania jako UTF-8/ASCII
+                decoded = val.decode("utf-8", "ignore").strip("\ufeff\x00 \t\n\r")
+                # Jeśli po dekodowaniu mamy śmieci (znaki nieczytelne), uznaj za nieczytelne
+                if all(c.isprintable() or c.isspace() for c in decoded):
+                    return decoded
+                return None  # Nieczytelne binaria
+            except:
+                return None
+        if isinstance(val, tuple):
+            return ", ".join(str(format_value(v)) for v in val if format_value(v) is not None)
+            
+        # Obsługa specyficznych typów (np. daty/czasu z MakerNote)
+        return str(val).strip("\x00 ")
+
     metadata = {}
+    # Tagi, których nigdy nie chcemy zapisywać (duże binaria, offsety)
+    BLACK_LIST_TAGS = {
+        34665,  # ExifOffset
+        34853,  # GPSInfo
+        40965,  # InteropOffset
+    }
+    
+    # Mapowanie nazw tagów PIL na bardziej standardowe (z ExifTool)
+    TAG_NAME_OVERRIDE = {
+        "ISOSpeedRatings": "ISO",
+        "BodySerialNumber": "SerialNumber",
+        "CameraOwnerName": "OwnerName",
+        "DateTimeOriginal": "CreateDate",
+        "DateTime": "ModifyDate",
+        "ExposureBiasValue": "ExposureCompensation",
+    }
+
     try:
         exif_data = img.getexif()
-        if not exif_data:
-            return {}
+        if exif_data:
+            # 1. Root tags (IFD0)
+            for tag_id, value in exif_data.items():
+                if tag_id in BLACK_LIST_TAGS:
+                    continue
+                name = ExifTags.TAGS.get(tag_id, str(tag_id))
+                name = TAG_NAME_OVERRIDE.get(name, name)
+                
+                # Specjalna obsługa MakerNote (tag 37500)
+                if tag_id == 37500:
+                    # Próbujemy wyłuskać czytelne fragmenty z MakerNote
+                    fmt_val = format_value(value)
+                    if fmt_val: metadata["MakerNote"] = fmt_val
+                    continue
 
-        # Root tags
-        for tag_id, value in exif_data.items():
-            tag_name = ExifTags.TAGS.get(tag_id, tag_id)
-            if isinstance(value, bytes):
+                fmt_val = format_value(value)
+                if fmt_val is not None:
+                    if name == "FocalLength":
+                        fmt_val = f"{fmt_val} mm"
+                    elif name == "ExposureCompensation" or name == "ExposureBiasValue":
+                        fmt_val = f"{fmt_val} EV"
+                    metadata[name] = fmt_val
+
+            # 2. Sub-IFDs
+            for ifd_id in [ExifTags.IFD.Exif, ExifTags.IFD.GPSInfo, ExifTags.IFD.Interop]:
                 try:
-                    value = value.decode("utf-8", "ignore")
-                except:
-                    value = str(value)
-            metadata[str(tag_name)] = str(value)
-
-        # Sub-IFDs (ExifOffset, GPSInfo, etc.)
-        for ifd_id in [ExifTags.IFD.Exif, ExifTags.IFD.GPSInfo, ExifTags.IFD.Interop]:
-            try:
-                ifd = exif_data.get_ifd(ifd_id)
-                for tag_id, value in ifd.items():
-                    if ifd_id == ExifTags.IFD.GPSInfo:
-                        tag_name = ExifTags.GPSTAGS.get(tag_id, tag_id)
-                    else:
-                        tag_name = ExifTags.TAGS.get(tag_id, tag_id)
-
-                    if isinstance(value, bytes):
-                        try:
-                            value = value.decode("utf-8", "ignore")
-                        except:
-                            value = str(value)
-                    metadata[str(tag_name)] = str(value)
-            except:
-                pass
+                    ifd = exif_data.get_ifd(ifd_id)
+                    if not ifd:
+                        continue
+                    for tag_id, value in ifd.items():
+                        if tag_id in BLACK_LIST_TAGS:
+                            continue
+                        if ifd_id == ExifTags.IFD.GPSInfo:
+                            name = ExifTags.GPSTAGS.get(tag_id, str(tag_id))
+                        else:
+                            name = ExifTags.TAGS.get(tag_id, str(tag_id))
+                        
+                        name = TAG_NAME_OVERRIDE.get(name, name)
+                        fmt_val = format_value(value)
+                        if fmt_val is not None:
+                            if name == "FocalLength":
+                                fmt_val = f"{fmt_val} mm"
+                            elif name == "ExposureCompensation":
+                                fmt_val = f"{fmt_val} EV"
+                            metadata[name] = fmt_val
+                except Exception as e:
+                    logger.debug(f"Pominięto IFD {ifd_id}: {e}")
+                
     except Exception as exc:
         logger.warning(f"Błąd ekstrakcji EXIF: {exc}")
+
+    # 3. IPTC Info
+    try:
+        from PIL import IptcImagePlugin
+        iptc = IptcImagePlugin.getiptcinfo(img)
+        if iptc:
+            # Common IPTC mapping (Dataset, Record) -> Name
+            # Based on IPTC / IIM standard
+            IPTC_NAMES = {
+                (2, 5): "ObjectName",
+                (2, 25): "Keywords",
+                (2, 40): "SpecialInstructions",
+                (2, 55): "DateCreated",
+                (2, 60): "TimeCreated",
+                (2, 62): "DigitalCreationDate",
+                (2, 63): "DigitalCreationTime",
+                (2, 80): "By-line",
+                (2, 85): "By-lineTitle",
+                (2, 90): "City",
+                (2, 92): "Sub-location",
+                (2, 95): "Province-State",
+                (2, 101): "Country",
+                (2, 103): "OriginalTransmissionReference",
+                (2, 105): "Headline",
+                (2, 110): "Credit",
+                (2, 115): "Source",
+                (2, 116): "CopyrightNotice",
+                (2, 120): "Caption-Abstract",
+                (2, 122): "Writer-Editor",
+            }
+            for tag, val in iptc.items():
+                name = IPTC_NAMES.get(tag, f"IPTC:{tag}")
+                fmt_val = format_value(val)
+                if fmt_val:
+                    metadata[name] = fmt_val
+    except Exception as exc:
+        logger.debug(f"Błąd ekstrakcji IPTC: {exc}")
+
+    # 4. XMP Info
+    try:
+        xmp_raw = img.info.get("xmp")
+        if xmp_raw:
+            if isinstance(xmp_raw, bytes):
+                xmp_str = xmp_raw.decode("utf-8", "ignore")
+            else:
+                xmp_str = str(xmp_raw)
+            
+            import re
+            found_xmp = {}
+            # Match <prefix:tag>value</prefix:tag> or prefix:tag="value"
+            tags = re.findall(r'<([\w:]+)[^>]*>([^<]+)</\1>', xmp_str)
+            for tag, val in tags:
+                clean_tag = tag.split(":")[-1]
+                if clean_tag not in metadata and len(val) < 200:
+                    found_xmp[f"XMP:{clean_tag}"] = val.strip()
+            
+            attrs = re.findall(r'([\w:]+)="([^"]+)"', xmp_str)
+            for tag, val in attrs:
+                clean_tag = tag.split(":")[-1]
+                if clean_tag not in metadata and len(val) < 200:
+                    found_xmp[f"XMP:{clean_tag}"] = val.strip()
+            
+            metadata.update(found_xmp)
+    except Exception as exc:
+        logger.debug(f"Błąd ekstrakcji XMP: {exc}")
+
+    # 5. ICC Profile Info
+    try:
+        icc = img.info.get("icc_profile")
+        if icc:
+            from PIL import ImageCms
+            import io
+            profile = ImageCms.getProfileDescription(io.BytesIO(icc))
+            if profile:
+                metadata["ICC:ProfileDescription"] = profile.strip()
+            manufacturer = ImageCms.getProfileManufacturer(io.BytesIO(icc))
+            if manufacturer:
+                metadata["ICC:Manufacturer"] = manufacturer.strip()
+            model = ImageCms.getProfileModel(io.BytesIO(icc))
+            if model:
+                metadata["ICC:Model"] = model.strip()
+    except Exception as exc:
+        logger.debug(f"Błąd ekstrakcji ICC: {exc}")
 
     return metadata
 

@@ -146,6 +146,24 @@ python main.py [--settings PATH] [--export-options PATH] [--debug]
 
 ---
 
+## Testy / Testing
+
+Do uruchamiania testów jednostkowych wykorzystywany jest framework `pytest`. W projekcie zainstalowany jest również plugin `pytest-html` do generowania czytelnych raportów.
+
+Aby uruchomić wszystkie testy i wygenerować raport HTML:
+```bash
+pytest --html=report.html --self-contained-html
+```
+
+W przypadku problemów z wykryciem komendy `pytest` w wierszu poleceń Windows, zalecane jest użycie modułu Pythona:
+```bash
+python -m pytest --html=report.html --self-contained-html
+```
+
+Po zakończeniu testów, raport będzie dostępny w pliku `report.html` w głównym katalogu projektu. Zaleca się uruchamianie testów z aktywowanym środowiskiem wirtualnym (krok 3 instalacji).
+
+---
+
 ## Struktura projektu / Project Structure
 
 ```

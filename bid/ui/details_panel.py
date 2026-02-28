@@ -82,7 +82,9 @@ class DetailsPanel(ttk.Frame):
             # Sortujemy alfabetycznie dla łatwiejszego przeglądania
             for tag in sorted(exif_dict.keys()):
                 val = exif_dict[tag]
-                self.exif_tree.insert("", "end", text=tag, values=(val,))
+                # Pomijamy puste wartości w widoku (ale zostają w słowniku)
+                if val and str(val).strip():
+                    self.exif_tree.insert("", "end", text=tag, values=(val,))
         
         self.exif_tree.tag_configure("bold", font=("Segoe UI", 9, "bold"))
 

@@ -13,10 +13,13 @@ from __future__ import annotations
 import datetime
 import logging
 import os
+import sys
 import time
 import threading
+import tkinter as tk
 from concurrent.futures import ProcessPoolExecutor, Future
 from pathlib import Path
+from tkinter import filedialog, messagebox, ttk
 
 import tkinter as tk
 from tkinter import ttk
@@ -49,26 +52,33 @@ class MainApp(tk.Tk):
 
     def __init__(
         self,
-        settings_path: Path | None = None,
-        export_options_path: Path | None = None,
+        project_path: Path,
+        debug: bool = False,
     ) -> None:
         """
         Args:
-            settings_path:       Opcjonalna niestandardowa ścieżka do settings.json.
-            export_options_path: Opcjonalna niestandardowa ścieżka do export_option.json.
+            project_path: Ścieżka do katalogu projektu.
+            debug: Czy uruchomić w trybie debugowania.
         """
         super().__init__()
-        self.title("BID — Batch Image Delivery")
+        self.project_path = project_path
+        self.debug_mode = debug
+        self.project_name = project_path.name.replace("_", " ")
+        self.title(f"BID — {self.project_name}")
+
+        from bid.project_manager import ProjectManager
+        ProjectManager.add_recent_project(str(project_path))
 
         # ----------------------------------------------------------------
-        # Wczytywanie konfiguracji
+        # Wczytywanie konfiguracji z folderu projektu
         # ----------------------------------------------------------------
-        self.settings = cfg_module.load_settings(settings_path)
-        self.export_settings = cfg_module.load_export_options(export_options_path)
+        self.settings = cfg_module.load_settings(project_path / "settings.json")
+        self.export_settings = cfg_module.load_export_options(project_path / "export_option.json")
 
         self.source_folder: str = self.settings["source_folder"]
         self.export_folder: str = self.settings["export_folder"]
 
+        logger.info(f"Project: {self.project_name}")
         logger.info(f"Source folder: {self.source_folder}")
         logger.info(f"Export folder: {self.export_folder}")
 
@@ -82,9 +92,9 @@ class MainApp(tk.Tk):
             os.makedirs(dest, exist_ok=True)
 
         # ----------------------------------------------------------------
-        # Source dict — wczytaj z pliku lub zbuduj od nowa
+        # Source dict — wczytaj z katalogu projektu
         # ----------------------------------------------------------------
-        saved = load_source_dict(PROJECT_DIR)
+        saved = load_source_dict(project_path)
         if saved is not None:
             self.source_dict = saved
             self.source_dict, _ = update_source_dict(
@@ -93,7 +103,7 @@ class MainApp(tk.Tk):
         else:
             logger.warning("Tworzę nowy source_dict")
             self.source_dict = create_source_dict(self.source_folder, self.export_folder, self.export_settings)
-        save_source_dict(self.source_dict, PROJECT_DIR)
+        save_source_dict(self.source_dict, project_path)
 
         # ----------------------------------------------------------------
         # UI — Układ główny
@@ -150,23 +160,73 @@ class MainApp(tk.Tk):
         self.update_source()
         self.scan_photos()
 
+    def on_new_project(self) -> None:
+        """Otwiera wizard nowego projektu i przeładowuje aplikację."""
+        from bid.ui.setup_wizard import run_wizard_if_needed
+        success, project_path = run_wizard_if_needed()
+        if success and project_path:
+            self.load_project(str(project_path))
+
+    def load_project(self, path: str) -> None:
+        """Przeładowuje aplikację z nowym projektem."""
+        logger.info(f"Przełączanie na projekt: {path}")
+        # Restart aplikacji z nowym projektem
+        args = [sys.executable, sys.argv[0], "--project", path]
+        if self.debug_mode:
+            args.append("--debug")
+            
+        os.execl(sys.executable, *args)
+
     def _build_main_menu(self) -> None:
-        """Tworzy pasek menu głównego."""
+        """Tworzy pasek menu głównego z funkcjami projektowymi."""
         menubar = tk.Menu(self)
         
-        # Plik
-        file_menu = tk.Menu(menubar, tearoff=0)
-        file_menu.add_command(label="Aktualizuj listę (Scan source)", command=self.update_source)
-        file_menu.add_separator()
-        file_menu.add_command(label="Wyjście", command=self.quit)
-        menubar.add_cascade(label="Plik", menu=file_menu)
+        # Projekt
+        project_menu = tk.Menu(menubar, tearoff=0)
+        project_menu.add_command(label="Nowy projekt...", command=self.on_new_project)
+        project_menu.add_command(label="Otwórz projekt...", command=self.on_open_project)
+        
+        # Ostatnie projekty (submenu)
+        recent_menu = tk.Menu(project_menu, tearoff=0)
+        from bid.project_manager import ProjectManager
+        recent_paths = ProjectManager.get_recent_projects()
+        
+        if recent_paths:
+            for path in recent_paths:
+                name = os.path.basename(path).replace("_", " ")
+                recent_menu.add_command(
+                    label=name, 
+                    command=lambda p=path: self.load_project(p)
+                )
+        else:
+            recent_menu.add_command(label="(brak)", state=tk.DISABLED)
+            
+        project_menu.add_cascade(label="Ostatnie projekty", menu=recent_menu)
+        project_menu.add_separator()
+        project_menu.add_command(label="Wyjście", command=self.quit)
+        menubar.add_cascade(label="Projekt", menu=project_menu)
 
         # Akcje
         action_menu = tk.Menu(menubar, tearoff=0)
+        action_menu.add_command(label="Aktualizuj listę (Scan source)", command=self.update_source)
         action_menu.add_command(label="Rozpocznij eksport", command=self.scan_photos)
         menubar.add_cascade(label="Akcje", menu=action_menu)
 
         self.config(menu=menubar)
+
+    def on_open_project(self) -> None:
+        """Otwiera dialog wyboru folderu projektu."""
+        from bid.project_manager import PROJECTS_DIR
+        path = filedialog.askdirectory(
+            title="Wybierz folder projektu",
+            initialdir=str(PROJECTS_DIR),
+            mustexist=True
+        )
+        if path:
+            if os.path.exists(os.path.join(path, "settings.json")):
+                self.load_project(path)
+            else:
+                messagebox.showerror("Błąd", "Wybrany folder nie jest poprawnym projektem BID.")
 
     # ================================================================
     # Przetwarzanie zdjęć
@@ -240,7 +300,7 @@ class MainApp(tk.Tk):
                 self._mark_error(folder, photo, f"Błąd krytyczny procesu: {exc}")
         
         if done_futures:
-            save_source_dict(self.source_dict, PROJECT_DIR)
+            save_source_dict(self.source_dict, self.project_path)
             self.scan_photos()
         
         if self.active_scanning:
@@ -305,7 +365,7 @@ class MainApp(tk.Tk):
                 )
 
                 # 3. Zapis
-                save_source_dict(self.source_dict, PROJECT_DIR)
+                save_source_dict(self.source_dict, self.project_path)
 
             # 4. Odświeżenie UI i start skanowania — musi być w main thread!
             self.after(0, self._sync_ui_after_update, found_new, integrity_changes)
@@ -335,7 +395,7 @@ class MainApp(tk.Tk):
         self.source_dict[folder][photo]["state"] = SourceState.ERROR
         self.source_dict[folder][photo]["error_msg"] = msg
         self.source_tree.change_tag(folder, photo, SourceState.ERROR)
-        save_source_dict(self.source_dict, PROJECT_DIR)
+        save_source_dict(self.source_dict, self.project_path)
 
     # ================================================================
     # Pomocnicze
@@ -353,7 +413,7 @@ class MainApp(tk.Tk):
         self.source_dict[folder][photo]["state"] = SourceState.ERROR
         self.source_dict[folder][photo]["error_msg"] = msg
         self.source_tree.change_tag(folder, photo, SourceState.ERROR)
-        save_source_dict(self.source_dict, PROJECT_DIR)
+        save_source_dict(self.source_dict, self.project_path)
 
     def mainloop(self, n: int = 0) -> None:
         """Nadpisujemy mainloop, aby zwolnić pool przy zamykaniu."""

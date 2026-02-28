@@ -80,15 +80,15 @@ class SetupWizard(tk.Tk):
 
     def __init__(
         self,
-        settings_path: Path,
-        export_options_path: Path,
-        missing_settings: bool,
-        missing_export: bool,
+        settings_path: Path | None = None,
+        export_options_path: Path | None = None,
+        missing_settings: bool = True,
+        missing_export: bool = True,
     ) -> None:
         """
         Args:
-            settings_path:       Docelowa ścieżka settings.json.
-            export_options_path: Docelowa ścieżka export_option.json.
+            settings_path:       Docelowa ścieżka settings.json (nieużywana w nowym modelu).
+            export_options_path: Docelowa ścieżka export_option.json (nieużywana w nowym modelu).
             missing_settings:    Czy settings.json nie istnieje / jest błędny.
             missing_export:      Czy export_option.json nie istnieje / jest błędny.
         """
@@ -98,10 +98,17 @@ class SetupWizard(tk.Tk):
         self.missing_settings = missing_settings
         self.missing_export = missing_export
         self.completed: bool = False
+        self.project_path: Path | None = None
 
-        self.title("BID — Konfiguracja początkowa")
+        # Inicjalizacja zmiennych przed budową UI
+        self._project_name_var = tk.StringVar(value="Nowy Projekt")
+        self._source_var = tk.StringVar()
+        self._export_var = tk.StringVar()
+        self._status_var = tk.StringVar()
+
+        self.title("BID — Kreator projektu")
         self.resizable(False, False)
-        self._center_window(520, 380)
+        self._center_window(520, 500)
 
         self._build_ui()
 
@@ -110,107 +117,17 @@ class SetupWizard(tk.Tk):
     # ------------------------------------------------------------------
 
     def _build_ui(self) -> None:
-        """Buduje układ okna kreatora."""
-        pad = {"padx": 18, "pady": 8}
-
-        # ---- Nagłówek ----
-        header = tk.Frame(self, bg="#1e3a5f")
-        header.pack(fill=tk.X)
-        tk.Label(
-            header,
-            text="⚙  BID — Konfiguracja początkowa",
-            font=("Segoe UI", 14, "bold"),
-            fg="white",
-            bg="#1e3a5f",
-            anchor=tk.W,
-            pady=14,
-            padx=18,
-        ).pack(fill=tk.X)
-
-        # ---- Opis brakujących plików ----
-        missing = []
-        if self.missing_settings:
-            missing.append("settings.json")
-        if self.missing_export:
-            missing.append("export_option.json")
-
-        msg = (
-            f"Nie znaleziono plików: {', '.join(missing)}.\n"
-            "Uzupełnij poniższe dane, aby uruchomić aplikację."
-        )
-        tk.Label(self, text=msg, justify=tk.LEFT, wraplength=480, pady=10).pack(
-            fill=tk.X, **{"padx": 18}
-        )
-
-        ttk.Separator(self).pack(fill=tk.X, padx=18)
-
-        # ---- Sekcja folderów (tylko gdy brakuje settings.json) ----
-        if self.missing_settings:
-            folders_frame = ttk.LabelFrame(self, text="Foldery", padding=10)
-            folders_frame.pack(fill=tk.X, **pad)
-
-            self._source_var = tk.StringVar()
-            self._export_var = tk.StringVar()
-
-            self._add_folder_row(
-                folders_frame, "Folder źródłowy (source):", self._source_var,
-                row=0,
-            )
-            self._add_folder_row(
-                folders_frame, "Folder docelowy (export):", self._export_var,
-                row=1,
-            )
-
-        # ---- Sekcja delivery (tylko gdy brakuje export_option.json) ----
-        if self.missing_export:
-            exp_frame = ttk.LabelFrame(
-                self, text="Profile eksportu (domyślne)", padding=10
-            )
-            exp_frame.pack(fill=tk.X, **pad)
-            profiles = list(DEFAULT_EXPORT_OPTIONS.keys())
-            summary = "  |  ".join(
-                f"{k}: {DEFAULT_EXPORT_OPTIONS[k]['size']}px "
-                f"({DEFAULT_EXPORT_OPTIONS[k]['format']})"
-                for k in profiles
-            )
-            tk.Label(
-                exp_frame,
-                text=summary,
-                font=("Segoe UI", 9),
-                fg="#444",
-                wraplength=455,
-                justify=tk.LEFT,
-            ).pack(anchor=tk.W)
-            tk.Label(
-                exp_frame,
-                text="Możesz edytować export_option.json po zakończeniu.",
-                font=("Segoe UI", 8, "italic"),
-                fg="#888",
-            ).pack(anchor=tk.W)
-
-        # ---- Komunikat walidacji ----
+        """Buduje układ okna kreatora z poprawnym kolejkowaniem pack()."""
+        # Inicjalizacja zmiennych
         self._status_var = tk.StringVar()
-        self._status_label = tk.Label(
-            self,
-            textvariable=self._status_var,
-            fg="red",
-            font=("Segoe UI", 9),
-        )
-        self._status_label.pack(padx=18, anchor=tk.W)
+        self._source_var = tk.StringVar()
+        self._export_var = tk.StringVar()
+        self._project_name_var = tk.StringVar(value="Nowy Projekt")
 
-        # ---- Przyciski ----
+        # 1. PRZYCISKI (Pakujemy jako pierwsze z side=BOTTOM, aby zarezerwować miejsce na dole)
         btn_frame = tk.Frame(self)
-        btn_frame.pack(fill=tk.X, padx=18, pady=(4, 16), side=tk.BOTTOM)
+        btn_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=18, pady=(10, 20))
 
-        # Wspólne style dla przycisków
-        btn_style = {
-            "font": ("Segoe UI", 9),
-            "padx": 15,
-            "pady": 5,
-            "cursor": "hand2",
-        }
-
-        # Przycisk Anuluj
         tk.Button(
             btn_frame,
             text="Anuluj",
@@ -219,10 +136,12 @@ class SetupWizard(tk.Tk):
             fg="#333",
             relief=tk.FLAT,
             borderwidth=1,
-            **btn_style
+            font=("Segoe UI", 9),
+            padx=15,
+            pady=5,
+            cursor="hand2"
         ).pack(side=tk.RIGHT, padx=(8, 0))
 
-        # Przycisk Zakończ
         tk.Button(
             btn_frame,
             text="Zakończ konfigurację",
@@ -232,8 +151,85 @@ class SetupWizard(tk.Tk):
             relief=tk.FLAT,
             activebackground="#2a5286",
             activeforeground="white",
-            **btn_style
+            font=("Segoe UI", 9),
+            padx=15,
+            pady=5,
+            cursor="hand2"
         ).pack(side=tk.RIGHT)
+
+        # 2. NAGŁÓWEK (Na górze)
+        header = tk.Frame(self, bg="#1e3a5f")
+        header.pack(side=tk.TOP, fill=tk.X)
+        tk.Label(
+            header,
+            text="⚙  BID — Kreator projektu",
+            font=("Segoe UI", 14, "bold"),
+            fg="white",
+            bg="#1e3a5f",
+            anchor=tk.W,
+            pady=14,
+            padx=18,
+        ).pack(fill=tk.X)
+
+        # 3. TREŚĆ (Wypełnia resztę)
+        content_frame = tk.Frame(self)
+        content_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=18, pady=10)
+
+        msg = (
+            "Skonfiguruj nowy projekt, wskazując foldery źródłowe i docelowe.\n"
+            "Projekt zostanie zapisany w katalogu 'projects/'."
+        )
+        tk.Label(content_frame, text=msg, justify=tk.LEFT, wraplength=460).pack(
+            fill=tk.X, pady=(0, 10)
+        )
+
+        ttk.Separator(content_frame).pack(fill=tk.X, pady=(0, 10))
+
+        # Sekcja Projektu
+        proj_frame = ttk.LabelFrame(content_frame, text="Informacje o projekcie", padding=10)
+        proj_frame.pack(fill=tk.X, pady=(0, 10))
+
+        tk.Label(proj_frame, text="Nazwa projektu:", anchor=tk.W).grid(
+            row=0, column=0, sticky=tk.W, pady=4, padx=(0, 8)
+        )
+        ttk.Entry(proj_frame, textvariable=self._project_name_var, width=38).grid(
+            row=0, column=1, sticky=tk.EW, pady=4
+        )
+        proj_frame.columnconfigure(1, weight=1)
+
+        # Sekcja folderów
+        folders_frame = ttk.LabelFrame(content_frame, text="Foldery", padding=10)
+        folders_frame.pack(fill=tk.X, pady=(0, 10))
+
+        self._add_folder_row(
+            folders_frame, "Folder źródłowy (source):", self._source_var,
+            row=0,
+        )
+        self._add_folder_row(
+            folders_frame, "Folder docelowy (export):", self._export_var,
+            row=1,
+        )
+
+        # Sekcja delivery
+        if self.missing_export:
+            exp_frame = ttk.LabelFrame(content_frame, text="Profile eksportu (domyślne)", padding=10)
+            exp_frame.pack(fill=tk.X, pady=(0, 10))
+            
+            profiles = list(DEFAULT_EXPORT_OPTIONS.keys())
+            summary = "  |  ".join(
+                f"{k}: {DEFAULT_EXPORT_OPTIONS[k]['size']}px"
+                for k in profiles
+            )
+            tk.Label(exp_frame, text=summary, font=("Segoe UI", 9), fg="#444", wraplength=440, justify=tk.LEFT).pack(anchor=tk.W)
+
+        # Komunikat błędu
+        self._status_label = tk.Label(
+            content_frame,
+            textvariable=self._status_var,
+            fg="red",
+            font=("Segoe UI", 9),
+        )
+        self._status_label.pack(anchor=tk.W)
 
     def _add_folder_row(
         self,
@@ -281,46 +277,33 @@ class SetupWizard(tk.Tk):
             var.set(path)
 
     def _on_finish(self) -> None:
-        """Waliduje dane, zapisuje pliki konfiguracyjne i zamyka wizard."""
-        if self.missing_settings:
-            source = self._source_var.get().strip()
-            export = self._export_var.get().strip()
-            if not source or not export:
-                self._status_var.set(
-                    "⚠  Podaj oba foldery, aby kontynuować."
-                )
-                return
+        """Waliduje dane, tworzy projekt przez ProjectManager i zamyka wizard."""
+        name = self._project_name_var.get().strip()
+        source = self._source_var.get().strip()
+        export = self._export_var.get().strip()
+        
+        if not name or not source or not export:
+            self._status_var.set("⚠  Podaj nazwę projektu i oba foldery.")
+            return
 
-            try:
-                settings = {
-                    "source_folder": source,
-                    "export_folder": export,
-                }
-                with open(self.settings_path, "w", encoding="utf-8") as fh:
-                    json.dump(settings, fh, indent=4, ensure_ascii=False)
-                logger.info(f"Zapisano settings.json → {self.settings_path}")
-            except Exception as exc:
-                self._status_var.set(f"⚠  Błąd zapisu settings.json: {exc}")
-                return
-
-        if self.missing_export:
-            try:
-                with open(self.export_options_path, "w", encoding="utf-8") as fh:
-                    json.dump(DEFAULT_EXPORT_OPTIONS, fh, indent=4, ensure_ascii=False)
-                logger.info(
-                    f"Zapisano domyślny export_option.json → {self.export_options_path}"
-                )
-            except Exception as exc:
-                self._status_var.set(f"⚠  Błąd zapisu export_option.json: {exc}")
-                return
-
-        self.completed = True
-        self.destroy()
+        try:
+            from bid.project_manager import ProjectManager
+            self.project_path = ProjectManager.create_project(
+                name, source, export, DEFAULT_EXPORT_OPTIONS
+            )
+            self.completed = True
+            logger.info(f"Utworzono projekt: {name} → {self.project_path}")
+            self.withdraw()
+            self.quit()
+        except Exception as exc:
+            self._status_var.set(f"⚠  Błąd tworzenia projektu: {exc}")
+            logger.error(f"SetupWizard Error: {exc}")
 
     def _on_cancel(self) -> None:
-        """Zamyka wizard bez zapisywania — aplikacja nie zostanie uruchomiona."""
+        """Zamyka wizard bez zapisywania."""
         self.completed = False
-        self.destroy()
+        self.withdraw()
+        self.quit()
 
     # ------------------------------------------------------------------
     # Pomocnicze
@@ -345,42 +328,21 @@ class SetupWizard(tk.Tk):
 # Funkcja pomocnicza — do wywołania z main.py
 # ---------------------------------------------------------------------------
 
-def run_wizard_if_needed(
-    settings_path: Path,
-    export_options_path: Path,
-) -> bool:
-    """Wyświetla kreatora jeśli brakuje któregoś pliku konfiguracji.
-
-    Args:
-        settings_path:       Ścieżka do settings.json.
-        export_options_path: Ścieżka do export_option.json.
+def run_wizard_if_needed() -> tuple[bool, Path | None]:
+    """Wyświetla kreatora projektu.
 
     Returns:
-        True jeśli aplikacja może kontynuować (wizard ukończony lub
-        oba pliki już istniały), False jeśli użytkownik anulował.
+        Krotka (success, project_path).
     """
-    missing_settings = not settings_path.is_file()
-    missing_export   = not export_options_path.is_file()
+    logger.info("Uruchamiam kreator projektu.")
 
-    if not missing_settings and not missing_export:
-        return True  # nic do roboty
-
-    logger.warning(
-        "Brakujące pliki konfiguracji: "
-        + (", ".join(
-            f for f, m in [
-                ("settings.json", missing_settings),
-                ("export_option.json", missing_export),
-            ] if m
-        ))
-        + " — uruchamiam kreator."
-    )
-
-    wizard = SetupWizard(
-        settings_path=settings_path,
-        export_options_path=export_options_path,
-        missing_settings=missing_settings,
-        missing_export=missing_export,
-    )
+    wizard = SetupWizard()
     wizard.mainloop()
-    return wizard.completed
+    
+    res = (wizard.completed, wizard.project_path)
+    try:
+        wizard.destroy()
+    except:
+        pass
+        
+    return res
