@@ -54,6 +54,7 @@ class SourceTree(tk.Frame):
         self.source_tree.heading("rozmiar", text="Rozmiar", anchor=tk.W)
         self.source_tree.heading("date",    text="Data",    anchor=tk.W)
 
+        # TODO: UX/UI: Zamiast kolorowania całego tła wiersza (co może być jaskrawe/nieczytelne), użyć ikon statusu (np. ✅, ❌, ⏳) w nowej kolumnie "Status". Kolory można zarezerwować tylko dla ikony lub delikatnego paska z lewej strony.
         self.source_tree.tag_configure(SourceState.NEW,        background="light gray")
         self.source_tree.tag_configure(SourceState.PROCESSING, background="sky blue")
         self.source_tree.tag_configure(SourceState.OK,         background="pale green")
@@ -174,6 +175,7 @@ class SourceTree(tk.Frame):
 
     def _build_context_menu(self) -> None:
         """Tworzy menu kontekstowe."""
+        # TODO: UX/UI: Dodać argumenty `image=` do `add_command` aby w menu kontekstowym pojawiły się małe ikony akcji (np. odśwież, usuń). Zwiększy to profesjonalizm.
         self.context_menu = tk.Menu(self, tearoff=0)
         self.context_menu.add_command(label="Rerun all / Przetwórz ponownie", command=self._rerun_selected)
         self.context_menu.add_command(label="Skip / Pomiń (Delete from list)", command=self._skip_selected)

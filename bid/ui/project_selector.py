@@ -38,6 +38,7 @@ class ProjectSelector(tk.Tk):
     def _build_ui(self) -> None:
         """Buduje układ okna."""
         # ---- Nagłówek ----
+        # TODO: UX/UI: Przenieść hardkodowany kolor nagłówka (#1e3a5f) do scentralizowanego motywu.
         header = tk.Frame(self, bg="#1e3a5f")
         header.pack(fill=tk.X)
         tk.Label(
@@ -56,6 +57,7 @@ class ProjectSelector(tk.Tk):
         main_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
 
         # ---- Lista projektów (Treeview) ----
+        # TODO: UX/UI: Poprawić styl Treeview (np. zwiększyć padding wierszy, usunąć standardowe ramki) przez ttk.Style.
         columns = ("name", "last_mod", "photos")
         self.tree = ttk.Treeview(main_frame, columns=columns, show="headings", height=8)
         
@@ -90,10 +92,12 @@ class ProjectSelector(tk.Tk):
         self.tree.bind("<Double-1>", lambda e: self._on_open_selected())
 
         # ---- Przyciski ----
+        # TODO: UX/UI: Dodać tło do ramki przycisków lub separator, żeby wyraźnie oddzielić je od listy projektów.
         btn_frame = ttk.Frame(self)
         btn_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=20, pady=(0, 20))
 
         # Styl dla przycisków
+        # TODO: UX/UI: Przyciski ttk domyślnie są dość małe. Warto stworzyć customowy styl (TButton) z większym paddingiem i lepszym fontem.
         btn_style = {"width": 15}
 
         ttk.Button(

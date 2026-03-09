@@ -39,6 +39,21 @@ class TestProjectManager:
             assert data["source_folder"] == str(source)
             assert data["export_folder"] == str(export)
 
+    def test_create_project_duplicate(self, temp_dir):
+        """Testuje, czy utworzenie projektu o istniejącej nazwie rzuca FileExistsError."""
+        name = "Duplicate Project"
+        source = temp_dir / "src"
+        export = temp_dir / "exp"
+        
+        # Pierwsze utworzenie
+        ProjectManager.create_project(name, str(source), str(export), {"opt": "val"})
+        
+        # Próba utworzenia projektu o tej samej nazwie powinna rzucić wyjątek
+        with pytest.raises(FileExistsError) as exc:
+            ProjectManager.create_project(name, str(source), str(export), {"opt": "val"})
+            
+        assert f"Projekt o nazwie '{name}' już istnieje." in str(exc.value)
+
     def test_recent_projects_list(self, temp_dir):
         """Testuje dodawanie i pobieranie ostatnich projektów."""
         p1 = temp_dir / "projects" / "p1"

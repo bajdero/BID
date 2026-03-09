@@ -19,6 +19,7 @@ class DetailsPanel(ttk.Frame):
         self.root = root
 
         # --- Sekcja EXIF ---
+        # TODO: UX/UI: Dodanie drobnej ikony (np. info obok nagłówka "Oryginalny EXIF") poprawiłoby wygląd.
         ttk.Label(self, text="Oryginalny EXIF", font=("Segoe UI", 10, "bold")).pack(anchor=tk.W)
         
         exif_container = ttk.Frame(self)
@@ -34,6 +35,7 @@ class DetailsPanel(ttk.Frame):
         h_scrollbar = ttk.Scrollbar(exif_container, orient=tk.HORIZONTAL, command=self.exif_tree.xview)
         self.exif_tree.configure(yscrollcommand=v_scrollbar.set, xscrollcommand=h_scrollbar.set)
         
+        # TODO: UX/UI: Przerobić w przyszłości scrollbary na autoukrywające się (pojawiają się tylko, gdy zawartość wychodzi poza ramy).
         # Layout using grid to accommodate both scrollbars
         self.exif_tree.grid(row=0, column=0, sticky="nsew")
         v_scrollbar.grid(row=0, column=1, sticky="ns")

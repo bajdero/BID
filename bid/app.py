@@ -112,10 +112,12 @@ class MainApp(tk.Tk):
         self._build_main_menu()
 
         # Główny kontener
+        # TODO: UX/UI: Użyć nowocześniejszego layoutu (np. grid zamiast pack) dla lepszego skalowania i dodania marginesów.
         main_container = ttk.Frame(self)
         main_container.pack(fill=tk.BOTH, expand=True)
 
         # Previews (Góra)
+        # TODO: UX/UI: Dodać tło lub ramkę oddzielającą strefę podglądu od reszty aplikacji.
         preview_frame = ttk.Frame(main_container)
         preview_frame.pack(side=tk.TOP, fill=tk.X, padx=5, pady=5)
         
@@ -137,6 +139,7 @@ class MainApp(tk.Tk):
         self.details_panel.pack(side=tk.RIGHT, fill=tk.Y, padx=(10, 0))
 
         # Pasek stanu / Progress (Dół)
+        # TODO: UX/UI: Pasek stanu wygląda bardzo surowo. Można dodać drobną ikonę statusu i usunąć relief=tk.SUNKEN dla bardziej nowoczesnego (płaskiego) wyglądu.
         self.status_bar = ttk.Frame(self, relief=tk.SUNKEN, padding=(2, 2))
         self.status_bar.pack(side=tk.BOTTOM, fill=tk.X)
 
@@ -171,7 +174,9 @@ class MainApp(tk.Tk):
         """Przeładowuje aplikację z nowym projektem."""
         logger.info(f"Przełączanie na projekt: {path}")
         # Restart aplikacji z nowym projektem
-        args = [sys.executable, sys.argv[0], "--project", path]
+        # Używamy ścieżki bezwzględnej do main.py, bo filedialog mógł zmienić CWD
+        script_path = str(Path(__file__).parent.parent / "main.py")
+        args = [sys.executable, script_path, "--project", path]
         if self.debug_mode:
             args.append("--debug")
             
@@ -216,10 +221,10 @@ class MainApp(tk.Tk):
 
     def on_open_project(self) -> None:
         """Otwiera dialog wyboru folderu projektu."""
-        from bid.project_manager import PROJECTS_DIR
+        from bid.project_manager import ProjectManager
         path = filedialog.askdirectory(
             title="Wybierz folder projektu",
-            initialdir=str(PROJECTS_DIR),
+            initialdir=str(ProjectManager.projects_dir),
             mustexist=True
         )
         if path:

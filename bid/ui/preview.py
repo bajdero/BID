@@ -42,6 +42,7 @@ class PrevWindow(tk.Frame):
         with Image.open(_placeholder_path) as img:
             self.tk_img = ImageTk.PhotoImage(img)
 
+        # TODO: UX/UI: Dodać zaokrąglenie rogów podglądu, a także zmienić tło canvasu ("gray") na zgodne z nowoczesnym motywem aplikacji (oraz usunąć ramkę obramowania `highlightthickness=0`).
         self.photo_canvas = tk.Canvas(
             self, width=self.size, height=self.size, bg="gray"
         )
@@ -65,6 +66,7 @@ class PrevWindow(tk.Frame):
         try:
             with Image.open(img_path) as img:
                 img = image_resize(img, self.size, Image.NEAREST, reducing_gap=1.5)
+                # TODO: UX/UI: Zastosować płynne przejście/animację (np. alfa blend w canvasie) przy zmianie zdjęcia, aby uniknąć błyskania.
                 self.tk_img = ImageTk.PhotoImage(img)
             self.photo_canvas.itemconfigure(self.img_canvas, image=self.tk_img)
         except Exception as exc:

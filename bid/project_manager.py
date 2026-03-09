@@ -52,6 +52,9 @@ class ProjectManager:
     def create_project(cls, name: str, source_folder: str, export_folder: str, export_settings: dict) -> Path:
         """Tworzy nowy folder projektu i pliki konfiguracyjne."""
         p_dir = cls.projects_dir / name.replace(" ", "_")
+        if p_dir.exists():
+            raise FileExistsError(f"Projekt o nazwie '{name}' już istnieje.")
+            
         os.makedirs(p_dir, exist_ok=True)
         
         settings = {

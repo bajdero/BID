@@ -125,6 +125,7 @@ class SetupWizard(tk.Tk):
         self._project_name_var = tk.StringVar(value="Nowy Projekt")
 
         # 1. PRZYCISKI (Pakujemy jako pierwsze z side=BOTTOM, aby zarezerwować miejsce na dole)
+        # TODO: UX/UI: Przenieść hardkodowane kolory ('#f0f0f0', '#1e3a5f') do globalnego pliku konfiguracyjnego motywu (np. style.py).
         btn_frame = tk.Frame(self)
         btn_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=18, pady=(10, 20))
 
@@ -158,6 +159,7 @@ class SetupWizard(tk.Tk):
         ).pack(side=tk.RIGHT)
 
         # 2. NAGŁÓWEK (Na górze)
+        # TODO: UX/UI: Dodać logo/ikonę aplikacji obok tytułu "BID — Kreator projektu" żeby rozbić tekst.
         header = tk.Frame(self, bg="#1e3a5f")
         header.pack(side=tk.TOP, fill=tk.X)
         tk.Label(
@@ -251,6 +253,7 @@ class SetupWizard(tk.Tk):
         )
         entry = ttk.Entry(parent, textvariable=var, width=38)
         entry.grid(row=row, column=1, sticky=tk.EW, pady=4)
+        # TODO: UX/UI: Zamiast szarego przycisku '…', użyć ikony folderu z biblioteki ikon (np. z Pillow/SVG).
         tk.Button(
             parent,
             text=" … ",
@@ -295,6 +298,9 @@ class SetupWizard(tk.Tk):
             logger.info(f"Utworzono projekt: {name} → {self.project_path}")
             self.withdraw()
             self.quit()
+        except FileExistsError as exc:
+            messagebox.showerror("Projekt już istnieje", f"Projekt o nazwie '{name}' już istnieje. Podaj inną nazwę.")
+            return
         except Exception as exc:
             self._status_var.set(f"⚠  Błąd tworzenia projektu: {exc}")
             logger.error(f"SetupWizard Error: {exc}")
