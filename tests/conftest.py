@@ -1,8 +1,12 @@
 import pytest
+import json
 import os
 import shutil
 from pathlib import Path
 from PIL import Image
+import logging
+
+LOGGER_NAME = "Yapa_CM"
 
 @pytest.fixture
 def temp_dir(tmp_path):
@@ -19,7 +23,6 @@ def sample_project(temp_dir):
         "source_folder": str(temp_dir / "source"),
         "export_folder": str(temp_dir / "export")
     }
-    import json
     with (proj_path / "settings.json").open("w", encoding="utf-8") as f:
         json.dump(settings, f)
         
@@ -38,3 +41,183 @@ def sample_image(temp_dir):
     img.save(img_path, "JPEG")
     
     return img_path
+
+
+# ─── NOWE FIXTURES (Faza 1) ───
+
+
+class LogCaptureHelper:
+    """Helper do weryfikacji logów w testach."""
+    
+    def __init__(self, caplog):
+        self._caplog = caplog
+    
+    @property
+    def records(self):
+        return self._caplog.records
+    
+    @property
+    def messages(self):
+        return [r.message for r in self._caplog.records]
+    
+    def has(self, substring: str, level: str = None) -> bool:
+        """Czy jest log zawierający substring (opcjonalnie na danym poziomie)."""
+        for r in self._caplog.records:
+            if substring in r.message:
+                if level is None or r.levelname == level:
+                    return True
+        return False
+    
+    def count(self, substring: str) -> int:
+        """Ile logów zawiera substring."""
+        return sum(1 for r in self._caplog.records if substring in r.message)
+    
+    def at_level(self, level: str) -> list[str]:
+        """Wszystkie wiadomości na danym poziomie."""
+        return [r.message for r in self._caplog.records if r.levelname == level]
+    
+    def assert_sequence(self, *substrings: str):
+        """Sprawdź czy logi zawierają podane substringi W KOLEJNOŚCI."""
+        msgs = self.messages
+        pos = 0
+        for sub in substrings:
+            found = False
+            for i in range(pos, len(msgs)):
+                if sub in msgs[i]:
+                    pos = i + 1
+                    found = True
+                    break
+            assert found, f"Brak '{sub}' w logach po pozycji {pos}. Logi: {msgs}"
+
+
+@pytest.fixture
+def log_capture(caplog):
+    """Przechwytuje logi Yapa_CM na poziomie DEBUG.
+    
+    Użycie w teście:
+        def test_x(log_capture):
+            do_something()
+            assert log_capture.has("Skanowanie", level="INFO")
+    """
+    with caplog.at_level(logging.DEBUG, logger=LOGGER_NAME):
+        yield LogCaptureHelper(caplog)
+
+
+@pytest.fixture
+def export_settings_fb():
+    """Pojedynczy profil eksportu 'fb' do testów."""
+    return {
+        "fb": {
+            "size_type": "longer",
+            "size": 1200,
+            "format": "JPEG",
+            "quality": 85,
+            "logo": {
+                "landscape": {"size": 240, "opacity": 60, "x_offset": 10, "y_offset": 10},
+                "portrait": {"size": 312, "opacity": 60, "x_offset": 10, "y_offset": 10}
+            }
+        }
+    }
+
+
+@pytest.fixture
+def export_settings_multi():
+    """Wieloprofilowy export settings (fb + insta)."""
+    return {
+        "fb": {
+            "size_type": "longer",
+            "size": 1200,
+            "format": "JPEG",
+            "quality": 85,
+            "logo": {
+                "landscape": {"size": 240, "opacity": 60, "x_offset": 10, "y_offset": 10},
+                "portrait": {"size": 312, "opacity": 60, "x_offset": 10, "y_offset": 10}
+            }
+        },
+        "insta": {
+            "size_type": "width",
+            "size": 1080,
+            "format": "PNG",
+            "quality": 9,
+            "logo": {
+                "landscape": {"size": 228, "opacity": 60, "x_offset": 10, "y_offset": 10},
+                "portrait": {"size": 296, "opacity": 60, "x_offset": 10, "y_offset": 10}
+            }
+        }
+    }
+
+
+@pytest.fixture
+def sample_image_with_exif(tmp_path):
+    """Tworzy JPEG z podstawowymi tagami EXIF."""
+    from PIL.ExifTags import IFD
+    img = Image.new("RGB", (2000, 1500), color="blue")
+    exif = img.getexif()
+    exif[0x010F] = "TestCamera"          # Make
+    exif[0x0110] = "TestModel"           # Model
+    exif[0x0132] = "2026:03:09 14:30:00" # DateTime
+    ifd = exif.get_ifd(IFD.Exif)
+    ifd[0x9003] = "2026:03:09 14:30:00"  # DateTimeOriginal
+    ifd[0x9004] = "2026:03:09 14:30:00"  # DateTimeDigitized
+    
+    session_dir = tmp_path / "source" / "session1"
+    session_dir.mkdir(parents=True)
+    img_path = session_dir / "test_exif.jpg"
+    img.save(img_path, "JPEG", exif=exif.tobytes())
+    return img_path
+
+
+@pytest.fixture
+def sample_logo(tmp_path):
+    """Tworzy logo.png w folderze źródłowym."""
+    logo = Image.new("RGBA", (600, 200), color=(255, 255, 255, 128))
+    # Dodaj jakiś wzór
+    for x in range(100, 500):
+        for y in range(50, 150):
+            logo.putpixel((x, y), (0, 0, 0, 200))
+    session_dir = tmp_path / "source" / "session1"
+    session_dir.mkdir(parents=True, exist_ok=True)
+    logo_path = session_dir / "logo.png"
+    logo.save(logo_path, "PNG")
+    return logo_path
+
+
+@pytest.fixture
+def full_test_project(tmp_path, export_settings_fb):
+    """Kompletny projekt testowy z ustawieniami, zdjęciami i logo."""
+    project_dir = tmp_path / "projects" / "TestProject"
+    source_dir = tmp_path / "source"
+    export_dir = tmp_path / "export"
+    
+    for d in [project_dir, source_dir, export_dir]:
+        d.mkdir(parents=True)
+    
+    # Settings
+    settings = {"source_folder": str(source_dir), "export_folder": str(export_dir)}
+    (project_dir / "settings.json").write_text(json.dumps(settings), encoding="utf-8")
+    (project_dir / "export_option.json").write_text(
+        json.dumps(export_settings_fb), encoding="utf-8"
+    )
+    
+    # Zdjęcia testowe
+    session_dir = source_dir / "session1"
+    session_dir.mkdir()
+    
+    for i in range(3):
+        img = Image.new("RGB", (2000, 1500), color=(100 + i * 50, 50, 50))
+        exif = img.getexif()
+        exif[0x0132] = f"2026:03:09 14:{30+i}:00"
+        img.save(session_dir / f"photo_{i}.jpg", "JPEG", exif=exif.tobytes())
+    
+    # Logo
+    logo = Image.new("RGBA", (600, 200), color=(255, 255, 255, 128))
+    logo.save(session_dir / "logo.png", "PNG")
+    
+    return {
+        "project_dir": project_dir,
+        "source_dir": source_dir,
+        "export_dir": export_dir,
+        "session_dir": session_dir,
+        "settings": settings,
+        "export_settings": export_settings_fb,
+    }

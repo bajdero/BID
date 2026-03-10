@@ -7,11 +7,15 @@ from bid.project_manager import ProjectManager
 
 logger = logging.getLogger("Yapa_CM")
 
-class ProjectSelector(tk.Tk):
-    """Okno wyboru projektu na starcie aplikacji."""
-    
-    def __init__(self) -> None:
-        super().__init__()
+class ProjectSelector(tk.Toplevel):
+    """Okno wyboru projektu — uruchamiane jako Toplevel w​ istniejącej instancji Tk.
+
+    Nigdy nie tworzy własnej instancji tk.Tk, aby uniknąć błędu:
+    ``Tcl_AsyncDelete: async handler deleted by the wrong thread``.
+    """
+
+    def __init__(self, parent: tk.Misc) -> None:
+        super().__init__(parent)
         
         self.title("BID — Wybierz projekt")
         self.geometry("600x450")
@@ -122,9 +126,9 @@ class ProjectSelector(tk.Tk):
         ).pack(side=tk.LEFT)
 
         ttk.Button(
-            btn_frame, 
-            text="Wyjdź", 
-            command=self.quit,
+            btn_frame,
+            text="Wyjść",
+            command=self.destroy,
             **btn_style
         ).pack(side=tk.RIGHT)
 
@@ -134,18 +138,17 @@ class ProjectSelector(tk.Tk):
         if not selection:
             messagebox.showwarning("Wybór", "Proszę zaznaczyć projekt z listy.")
             return "break"
-        
+
         path = selection[0]
         self.selected_project = Path(path)
-        self.withdraw()
-        self.quit()
+        logger.info(f"[UI] Wybrano projekt: {self.selected_project}")
+        self.destroy()  # triggers wait_window() return in parent
         return "break"
 
     def _on_new_project(self) -> None:
         """Zamyka okno z flagą tworzenia nowego projektu."""
         self.create_new = True
-        self.withdraw()
-        self.quit()
+        self.destroy()
 
     def _on_browse(self) -> None:
         """Otwiera dialog wyboru folderu."""
@@ -156,28 +159,28 @@ class ProjectSelector(tk.Tk):
             mustexist=True
         )
         if path:
+            logger.info(f"[UI] Przeglądanie projektu z: {path}")
             if os.path.exists(os.path.join(path, "settings.json")):
                 self.selected_project = Path(path)
-                self.withdraw()
-                self.quit()
+                self.destroy()
             else:
                 messagebox.showerror("Błąd", "Wybrany folder nie jest poprawnym projektem BID.")
 
-def run_project_selector() -> tuple[bool, bool, Path | None]:
-    """Uruchamia okno wyboru projektu.
-    
+def run_project_selector(parent: tk.Misc) -> tuple[bool, bool, Path | None]:
+    """Uruchamia okno wyboru projektu jako modalny Toplevel.
+
+    WYMAGA istniejącej instancji tk.Tk jako 'parent'. Nie tworzy własnej tk.Tk,
+    co zapobiega błędowi ``Tcl_AsyncDelete: async handler deleted by the wrong thread``.
+
+    Args:
+        parent: Istniejące okno Tkinter (np. instancja MainApp).
+
     Returns:
         Krotka (success, create_new, project_path).
     """
-    selector = ProjectSelector()
-    selector.mainloop()
-    
+    selector = ProjectSelector(parent)
+    selector.grab_set()           # modal — blokuje interakcję z głównym oknem
+    parent.wait_window(selector)  # blokuje do czasu zamknięcia Toplevel
+
     success = selector.selected_project is not None or selector.create_new
-    res = (success, selector.create_new, selector.selected_project)
-    
-    try:
-        selector.destroy()
-    except:
-        pass
-        
-    return res
+    return (success, selector.create_new, selector.selected_project)

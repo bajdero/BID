@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import logging
 import os
+import queue
 
 import _tkinter
 import tkinter as tk
@@ -50,11 +51,18 @@ class PrevWindow(tk.Frame):
         self.img_canvas = self.photo_canvas.create_image(
             self.size / 2, self.size / 2, image=self.tk_img
         )
+        # Queue used for thread-safe image handoff.
+        # Worker threads only ever touch this queue (no Tcl calls).
+        # The main thread drains it via _poll_img_queue().
+        self._img_queue: queue.Queue = queue.Queue(maxsize=1)
+        self._poll_img_queue()  # start polling loop on main thread
 
     def change_img(self, img_path: str) -> None:
-        """Ładuje i wyświetla nowe zdjęcie.
+        """Wczytuje zdjęcie z dysku. Bezpieczne do wywołania z DOWOLNEGO wątku.
 
-        Przeznaczone do wywołania z wątku pomocniczego.
+        Wykonuje tylko I/O + PIL resize, po czym odkrywa wynik w kolejce
+        Pythonowej (bez żadnych wywołań Tcl/Tkinter). Główny wątek odbiera
+        wynik przez _poll_img_queue() i aktualizuje widget.
 
         Args:
             img_path: Ścieżka do pliku obrazu.
@@ -65,9 +73,37 @@ class PrevWindow(tk.Frame):
             return
         try:
             with Image.open(img_path) as img:
-                img = image_resize(img, self.size, Image.NEAREST, reducing_gap=1.5)
-                # TODO: UX/UI: Zastosować płynne przejście/animację (np. alfa blend w canvasie) przy zmianie zdjęcia, aby uniknąć błyskania.
-                self.tk_img = ImageTk.PhotoImage(img)
-            self.photo_canvas.itemconfigure(self.img_canvas, image=self.tk_img)
+                # TODO: UX/UI: Zastosować płynne przejście/animację przy zmianie zdjęcia.
+                resized = image_resize(img, self.size, Image.NEAREST, reducing_gap=1.5)
+            # Pure-Python queue put — no Tcl involved at all.
+            try:
+                self._img_queue.put_nowait(resized)
+            except queue.Full:
+                pass  # main thread hasn’t consumed the previous frame yet; discard
         except Exception as exc:
             logger.error(f"Błąd wczytywania podglądu '{img_path}': {exc}")
+
+    def _poll_img_queue(self) -> None:
+        """Sprawdza kolejkę zdjęć i aktualizuje canvas — TYLKO główny wątek.
+
+        Pierwszy raz wywołana z __init__ (główny wątek), każde kolejne wywołanie
+        pochodzi z self.after() — zawsze na głównym wątku. Nigdy nie jest
+        wywoływana bezpośrednio z wątku roboczego.
+        """
+        try:
+            pil_img = self._img_queue.get_nowait()
+            self._apply_image(pil_img)
+        except queue.Empty:
+            pass
+        try:
+            self.after(50, self._poll_img_queue)
+        except Exception:
+            pass  # widget został zniszczony — kończymy pętlę
+
+    def _apply_image(self, pil_img: Image.Image) -> None:
+        """Tworzy PhotoImage i aktualizuje canvas — MUSI być na głównym wątku."""
+        try:
+            self.tk_img = ImageTk.PhotoImage(pil_img)
+            self.photo_canvas.itemconfigure(self.img_canvas, image=self.tk_img)
+        except Exception as exc:
+            logger.error(f"Błąd aktualizacji podglądu: {exc}")

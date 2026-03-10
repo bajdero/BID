@@ -11,6 +11,8 @@ Tool for automatic image scaling, watermark overlay, and delivery folder export.
 |---|---|
 | Python | 3.10+ |
 | Pillow | 10.0+ |
+| pytest | 7.0+ (tylko do testów) |
+| pytest-html | 4.0+ (tylko do testów) |
 | tkinter | (wbudowany w Python na Windows; osobny pakiet na Fedorze) |
 
 ---
@@ -148,19 +150,83 @@ python main.py [--settings PATH] [--export-options PATH] [--debug]
 
 ## Testy / Testing
 
-Do uruchamiania testów jednostkowych wykorzystywany jest framework `pytest`. W projekcie zainstalowany jest również plugin `pytest-html` do generowania czytelnych raportów.
+Do uruchamiania testów wykorzystywany jest framework `pytest`. W projekcie zainstalowany jest również plugin `pytest-html` do generowania czytelnych raportów.
 
-Aby uruchomić wszystkie testy i wygenerować raport HTML:
+### Uruchamianie wszystkich testów
+
 ```bash
-pytest --html=report.html --self-contained-html
+pytest tests/ -v
 ```
 
-W przypadku problemów z wykryciem komendy `pytest` w wierszu poleceń Windows, zalecane jest użycie modułu Pythona:
+W przypadku problemów z wykryciem komendy `pytest` w wierszu poleceń Windows:
+
 ```bash
-python -m pytest --html=report.html --self-contained-html
+python -m pytest tests/ -v
 ```
 
-Po zakończeniu testów, raport będzie dostępny w pliku `report.html` w głównym katalogu projektu. Zaleca się uruchamianie testów z aktywowanym środowiskiem wirtualnym (krok 3 instalacji).
+### Testy jednostkowe (unit tests)
+
+Testy jednostkowe weryfikują zachowanie pojedynczych modułów w izolacji:
+
+```bash
+# Wszystkie testy jednostkowe
+pytest tests/test_image_processing.py tests/test_config.py tests/test_source_manager.py tests/test_project_manager.py -v
+
+# Pojedynczy moduł
+pytest tests/test_image_processing.py -v
+pytest tests/test_source_manager.py -v
+pytest tests/test_config.py -v
+pytest tests/test_project_manager.py -v
+```
+
+### Testy integracyjne
+
+Testy integracyjne weryfikują współpracę między modułami:
+
+```bash
+# Wszystkie testy integracyjne
+pytest tests/test_workflows.py tests/test_integrity.py tests/test_config_processing.py -v
+
+# Workflow przetwarzania obrazów (6 testów)
+pytest tests/test_workflows.py -v
+
+# Integralność systemu plików (4 testy)
+pytest tests/test_integrity.py -v
+
+# Interakcja konfiguracji z przetwarzaniem (4 testy)
+pytest tests/test_config_processing.py -v
+```
+
+### Przydatne opcje
+
+```bash
+# Zatrzymaj na pierwszym błędzie
+pytest tests/ -x -v
+
+# Pokaż logi na poziomie DEBUG
+pytest tests/ -v --log-cli-level=DEBUG
+
+# Wygeneruj raport HTML
+pytest tests/ --html=report.html --self-contained-html
+```
+
+Po zakończeniu testów raport HTML dostępny jest w pliku `report.html` w głównym katalogu projektu.
+
+### Struktura testów
+
+```
+tests/
+├── conftest.py                  ← Globalne fixtures (log_capture, full_test_project, …)
+├── test_image_processing.py     ← Testy jednostkowe: skalowanie, watermark, EXIF
+├── test_config.py               ← Testy jednostkowe: ładowanie konfiguracji
+├── test_source_manager.py       ← Testy jednostkowe: skanowanie, source_dict
+├── test_project_manager.py      ← Testy jednostkowe: zarządzanie projektami
+├── test_workflows.py            ← Integracyjne: pełny workflow eksportu
+├── test_integrity.py            ← Integracyjne: integralność systemu plików
+└── test_config_processing.py    ← Integracyjne: konfiguracja → przetwarzanie
+```
+
+Zaleca się uruchamianie testów z aktywowanym środowiskiem wirtualnym (krok 3 instalacji).
 
 ---
 

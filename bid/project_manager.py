@@ -22,7 +22,9 @@ class ProjectManager:
             with open(cls.recent_projects_file, "r", encoding="utf-8") as f:
                 data = json.load(f)
                 if isinstance(data, list):
-                    return [str(p) for p in data if isinstance(p, str) and os.path.isdir(p)]
+                    existing = [str(p) for p in data if isinstance(p, str) and os.path.isdir(p)]
+                    logger.debug(f"[PROJECT] Znaleziono {len(existing)} ostatnich projektów")
+                    return existing
                 return []
         except Exception as e:
             logger.error(f"Błąd odczytu ostatnich projektów: {e}")
@@ -56,6 +58,7 @@ class ProjectManager:
             raise FileExistsError(f"Projekt o nazwie '{name}' już istnieje.")
             
         os.makedirs(p_dir, exist_ok=True)
+        logger.info(f"[PROJECT] Tworzę projekt: '{name}' → {p_dir}")
         
         settings = {
             "source_folder": os.path.abspath(source_folder),
@@ -109,6 +112,7 @@ class ProjectManager:
                             if isinstance(data[folder], dict):
                                 count += len(data[folder])
                     details["photo_count"] = count
+                    logger.debug(f"[PROJECT] Detale projektu {project_path}: {count} zdjęć")
             else:
                 # Jeśli brak source_dict, sprawdź settings.json dla samej daty
                 settings_path = path / "settings.json"

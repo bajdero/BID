@@ -32,7 +32,7 @@ def _load_json(path: Path, label: str) -> dict:
     try:
         with open(path, "r", encoding="utf-8") as fh:
             data = json.load(fh)
-        logger.debug(f"Loaded config: {path}")
+        logger.debug(f"Loaded config: {path} ({len(data)} keys)")
         return data
     except FileNotFoundError:
         logger.critical(f"Config file not found: {path} ({label})")
@@ -67,4 +67,6 @@ def load_export_options(path: Path | None = None) -> dict:
     """
     if path is None:
         path = PROJECT_DIR / "export_option.json"
-    return _load_json(path, "export_options")
+    data = _load_json(path, "export_options")
+    logger.info(f"[CONFIG] Załadowano {len(data)} profili eksportu: {', '.join(data.keys())}")
+    return data

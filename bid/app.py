@@ -15,9 +15,10 @@ import logging
 import os
 import sys
 import time
+import queue
 import threading
 import tkinter as tk
-from concurrent.futures import ProcessPoolExecutor, Future
+from concurrent.futures import ThreadPoolExecutor, Future
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
@@ -48,21 +49,45 @@ logger = logging.getLogger("Yapa_CM")
 
 
 class MainApp(tk.Tk):
-    """Główne okno aplikacji BID."""
+    """Główne okno aplikacji BID.
+
+    Jest JEDYNĄ instancją tk.Tk w procesie. Dialog wyboru projektu
+    i kreator są pokazywane jako tk.Toplevel wewnątrz tej instancji,
+    co zapobiega błędowi:
+        Tcl_AsyncDelete: async handler deleted by the wrong thread
+    """
 
     def __init__(
         self,
-        project_path: Path,
+        project_path: "Path | None" = None,
         debug: bool = False,
     ) -> None:
         """
         Args:
-            project_path: Ścieżka do katalogu projektu.
+            project_path: Ścieżka do katalogu projektu (None = pokaż selektor).
             debug: Czy uruchomić w trybie debugowania.
         """
         super().__init__()
-        self.project_path = project_path
         self.debug_mode = debug
+        self._running = False  # set True only after full successful init
+
+        # Hide the empty shell while we may be showing the selector dialog.
+        self.withdraw()
+
+        # ----------------------------------------------------------------
+        # Project selection (modal Toplevel — no extra tk.Tk created)
+        # ----------------------------------------------------------------
+        if project_path is None:
+            project_path = self._select_project_modal()
+            if project_path is None:
+                return  # User cancelled — _running stays False
+
+        if not project_path.exists():
+            logger.warning(f"Projekt nie istnieje: {project_path}, uruchamiam wizard")
+            success, project_path = self._run_wizard_modal()
+            if not success or project_path is None:
+                return
+        self.project_path = project_path
         self.project_name = project_path.name.replace("_", " ")
         self.title(f"BID — {self.project_name}")
 
@@ -154,19 +179,45 @@ class MainApp(tk.Tk):
         # ----------------------------------------------------------------
         self.active_scanning: dict[Future, tuple[str, str]] = {}
         self.max_workers: int = os.cpu_count() or 4
-        self.executor = ProcessPoolExecutor(max_workers=self.max_workers)
-        
+        self.executor = ThreadPoolExecutor(max_workers=self.max_workers)
+
         self.update_source_thread: threading.Thread | None = None
         self.find_new: bool = False
         self.dict_lock = threading.Lock()
+        self._stop_event = threading.Event()
+        self._update_queue: queue.Queue = queue.Queue(maxsize=1)
+
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
+
+        self.deiconify()  # show main window now that init is complete
+        self._running = True
 
         self.update_source()
         self.scan_photos()
 
+    # ================================================================
+    # Project selection helpers (Toplevel dialogs — no extra tk.Tk)
+    # ================================================================
+
+    def _select_project_modal(self) -> "Path | None":
+        """Pokazuje selektor projektów jako modalny Toplevel."""
+        from bid.ui.project_selector import run_project_selector
+        success, create_new, selected_path = run_project_selector(parent=self)
+        if not success:
+            return None
+        if create_new:
+            ok, path = self._run_wizard_modal()
+            return path if ok else None
+        return selected_path
+
+    def _run_wizard_modal(self) -> "tuple[bool, Path | None]":
+        """Pokazuje kreator projektu jako modalny Toplevel."""
+        from bid.ui.setup_wizard import run_wizard_if_needed
+        return run_wizard_if_needed(parent=self)
+
     def on_new_project(self) -> None:
         """Otwiera wizard nowego projektu i przeładowuje aplikację."""
-        from bid.ui.setup_wizard import run_wizard_if_needed
-        success, project_path = run_wizard_if_needed()
+        success, project_path = self._run_wizard_modal()
         if success and project_path:
             self.load_project(str(project_path))
 
@@ -343,17 +394,19 @@ class MainApp(tk.Tk):
 
     def update_source(self) -> None:
         """Planuje cykliczne sprawdzanie folderu źródłowego (co sekundę)."""
+        if self._stop_event.is_set():
+            return
         if self.update_source_thread is not None and self.update_source_thread.is_alive():
             logger.warning("Poprzednia aktualizacja source jeszcze trwa")
-            self.after(1000, self.update_source)
-            return
+            return  # _poll_update_source is already running for this cycle
         self.update_source_thread = threading.Thread(
             target=self._update_source_worker, daemon=True
         )
         self.update_source_thread.start()
+        self.after(100, self._poll_update_source)
 
     def _update_source_worker(self) -> None:
-        """Wątek roboczy cyklicznego odświeżania source_dict."""
+        """Wątek roboczy cyklicznego odświeżania source_dict. NIE wywołuje Tkinter."""
         logger.debug("Cykliczne sprawdzanie source i integralności")
         try:
             with self.dict_lock:
@@ -372,13 +425,30 @@ class MainApp(tk.Tk):
                 # 3. Zapis
                 save_source_dict(self.source_dict, self.project_path)
 
-            # 4. Odświeżenie UI i start skanowania — musi być w main thread!
-            self.after(0, self._sync_ui_after_update, found_new, integrity_changes)
+            # Wyniki trafiają do kolejki — main thread odbiera przez _poll_update_source.
+            # NIE wolno wołać self.after() z wątku roboczego!
+            try:
+                self._update_queue.put_nowait((found_new, integrity_changes))
+            except queue.Full:
+                pass  # main thread is still processing the previous result
 
         except Exception as exc:
             logger.error(f"Błąd cyklicznego sprawdzania source: {exc}")
-        finally:
+            try:
+                self._update_queue.put_nowait((False, {}))
+            except queue.Full:
+                pass
+
+    def _poll_update_source(self) -> None:
+        """Odpytuje kolejkę wyników wątku source — wywoływane tylko na głównym wątku."""
+        if self._stop_event.is_set():
+            return
+        try:
+            found_new, integrity_changes = self._update_queue.get_nowait()
+            self._sync_ui_after_update(found_new, integrity_changes)
             self.after(1000, self.update_source)
+        except queue.Empty:
+            self.after(100, self._poll_update_source)
 
     def _sync_ui_after_update(self, found_new: bool, integrity_changes: dict) -> None:
         """UI sync — wywoływane w main thread (przez after)."""
@@ -420,9 +490,25 @@ class MainApp(tk.Tk):
         self.source_tree.change_tag(folder, photo, SourceState.ERROR)
         save_source_dict(self.source_dict, self.project_path)
 
+    def _on_close(self) -> None:
+        """Graceful shutdown — sygnalizuje wątkom, że czas kończyć."""
+        self._stop_event.set()
+        self.destroy()
+
     def mainloop(self, n: int = 0) -> None:
         """Nadpisujemy mainloop, aby zwolnić pool przy zamykaniu."""
+        if not self._running:
+            # __init__ returned early (user cancelled project selection)
+            try:
+                self.destroy()
+            except Exception:
+                pass
+            return
         try:
             super().mainloop(n)
         finally:
-            self.executor.shutdown(wait=False)
+            self._stop_event.set()
+            try:
+                self.executor.shutdown(wait=False, cancel_futures=True)
+            except TypeError:
+                self.executor.shutdown(wait=False)

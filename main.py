@@ -92,38 +92,11 @@ if __name__ == "__main__":
     logger = logging.getLogger("Yapa_CM")
     logger.info("Uruchamianie BID")
 
-    # Importy po skonfigurowaniu loggera
-    from bid.project_manager import ProjectManager
-    from bid.ui.setup_wizard import run_wizard_if_needed
-    from bid.ui.project_selector import run_project_selector
     from bid.app import MainApp
 
-    project_path: Path | None = args.project
-
-    # Jeśli nie podano projektu w argumentach, otwórz selector
-    if project_path is None:
-        success, create_new, selected_path = run_project_selector()
-        
-        if not success:
-            logger.info("Nie wybrano projektu. Zamykanie.")
-            sys.exit(0)
-            
-        if create_new:
-            success_wizard, project_path = run_wizard_if_needed()
-            if not success_wizard or not project_path:
-                logger.info("Anulowano tworzenie projektu. Zamykanie.")
-                sys.exit(0)
-        else:
-            project_path = selected_path
-
-    # Podwójne sprawdzenie czy projekt istnieje (np. jeśli podany przez --project)
-    if project_path is None or not project_path.exists():
-        logger.error(f"Projekt nie istnieje: {project_path}")
-        success_wizard, project_path = run_wizard_if_needed()
-        if not success_wizard or not project_path:
-            logger.info("Anulowano konfigurację. Zamykanie.")
-            sys.exit(0)
-
-    app = MainApp(project_path=project_path, debug=args.debug)
+    # MainApp jest jedyną instancją tk.Tk w procesie.
+    # Jeśli project_path is None, MainApp pokaże selektor projektów
+    # jako modalny Toplevel — bez tworzenia dodatkowej instancji tk.Tk.
+    app = MainApp(project_path=args.project, debug=args.debug)
     app.mainloop()
     logger.info("Zamknięto aplikację")

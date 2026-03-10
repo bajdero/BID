@@ -5,7 +5,6 @@ Widget listy plików źródłowych — SourceTree.
 from __future__ import annotations
 
 import logging
-from threading import Thread
 
 import _tkinter
 import tkinter as tk
@@ -140,7 +139,12 @@ class SourceTree(tk.Frame):
     # ------------------------------------------------------------------
 
     def _on_double_click(self, event: tk.Event) -> None:
-        """Obsługa podwójnego kliknięcia — ładuje podgląd zdjęcia."""
+        """Obsługa podwójnego kliknięcia — ładuje podgląd zdjęcia.
+
+        Używa MainApp.executor (ThreadPoolExecutor) zamiast tworzyć nowy wątek.
+        Eliminuje problem przypadkowego uruchamiania GC na starych obiektach
+        Tkinter z nowego wątku, co powodowało Tcl_AsyncDelete.
+        """
         tree: ttk.Treeview = event.widget
         selected = tree.selection()
         if not selected:
@@ -148,13 +152,9 @@ class SourceTree(tk.Frame):
         item_id = selected[0]
         if "_" not in item_id:
             return
-            
+
         path = tree.item(item_id)["values"][-1]
-        Thread(
-            target=self.root.source_prev.change_img,
-            args=(str(path),),
-            daemon=True,
-        ).start()
+        self.root.executor.submit(self.root.source_prev.change_img, str(path))
 
     def _on_select(self, event: tk.Event) -> None:
         """Obsługa wyboru elementu — aktualizuje panel szczegółów."""

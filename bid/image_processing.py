@@ -35,8 +35,11 @@ def image_convert_to_srgb(img: Image.Image) -> Image.Image:
     Returns:
         Obraz w przestrzeni sRGB.
     """
-    logger.debug("Konwertuję zdjęcie na sRGB")
     icc = img.info.get("icc_profile", "")
+    if icc:
+        logger.debug("Konwertuję zdjęcie na sRGB (znaleziono profil ICC)")
+    else:
+        logger.debug("Brak profilu ICC — pomijam konwersję sRGB")
     if icc:
         io_handle = io.BytesIO(icc)
         src_profile = ImageCms.ImageCmsProfile(io_handle)
@@ -71,7 +74,7 @@ def image_resize(
     Returns:
         Przeskalowany obraz.
     """
-    logger.debug(f"Skaluję zdjęcie do {longer_side} px (metoda: {method})")
+    logger.debug(f"Skaluję zdjęcie {img.width}x{img.height} → {longer_side}px (metoda: {method})")
 
     if method == "longer":
         ratio = longer_side / max(img.size)
@@ -133,7 +136,7 @@ def apply_watermark(
     Returns:
         Obraz RGB z nałożonym watermarkiem.
     """
-    logger.debug(f"Nakładam watermark z {logo_path}")
+    logger.debug(f"Nakładam watermark z {logo_path} (rozmiar={size}, opacity={opacity})")
 
     full_logo = get_logo(logo_path)
     logo = image_resize(full_logo, size, resamle=Image.NEAREST)
@@ -178,6 +181,7 @@ def process_photo_task(
     from PIL import Image
 
     start_time = time.perf_counter()
+    logger.info(f"[PROCESS] Start: {folder_name}/{photo_name}")
     now = datetime.datetime.now()
     # Explicit types to satisfy strict linters if needed
     results: dict[str, Any] = {
@@ -194,6 +198,7 @@ def process_photo_task(
         except Exception as exc:
             results["success"] = False
             results["error_msg"] = f"Błąd otwarcia pliku '{photo_path}': {exc}"
+            logger.error(f"[PROCESS] Błąd otwarcia: {folder_name}/{photo_name} — {exc}")
             return results
 
         # ---- EXIF ----
@@ -202,6 +207,7 @@ def process_photo_task(
         except Exception as exc:
             results["success"] = False
             results["error_msg"] = f"Błąd odczytu EXIF '{photo_path}': {exc}"
+            logger.error(f"[PROCESS] Błąd EXIF: {folder_name}/{photo_name} — {exc}")
             return results
 
         # Standardowe pola EXIF
@@ -216,10 +222,12 @@ def process_photo_task(
 
         # ---- Eksport dla każdego delivery ----
         for deliver, d_cfg in export_settings.items():
+            logger.debug(f"[PROCESS] Eksport profil '{deliver}': {folder_name}/{photo_name}")
             # Optymalizacja: jeśli plik już istnieje, pomijamy ten wariant
             existing_path = existing_exports.get(deliver)
             if existing_path and os.path.isfile(existing_path):
                 results["exported"][deliver] = existing_path
+                logger.debug(f"[PROCESS] Pomijam istniejący eksport '{deliver}': {existing_path}")
                 continue
 
             # Check ratio
@@ -227,6 +235,7 @@ def process_photo_task(
             if ratios is not None:
                 actual = round(raw_photo.width / raw_photo.height, 2)
                 if actual not in ratios:
+                    logger.debug(f"[PROCESS] Pomijam '{deliver}' — ratio {actual} poza zakresem {ratios}")
                     continue
 
             # Skalowanie
@@ -239,6 +248,7 @@ def process_photo_task(
             except Exception as exc:
                 results["success"] = False
                 results["error_msg"] = f"Błąd skalowania w {deliver}: {exc}"
+                logger.error(f"[PROCESS] Błąd skalowania: {folder_name}/{photo_name} profil={deliver} — {exc}")
                 return results
 
             exif[256] = resized.width
@@ -250,6 +260,7 @@ def process_photo_task(
             except Exception as exc:
                 results["success"] = False
                 results["error_msg"] = f"Błąd konwersji sRGB w {deliver}: {exc}"
+                logger.error(f"[PROCESS] Błąd sRGB: {folder_name}/{photo_name} profil={deliver} — {exc}")
                 return results
 
             # Watermark / logo
@@ -259,19 +270,24 @@ def process_photo_task(
             # photo_path to pełna ścieżka.
             logo_path = os.path.join(os.path.dirname(photo_path), "logo.png")
             logo_cfg = d_cfg["logo"][orientation]
-            try:
-                final_img = apply_watermark(
-                    base=img_conv,
-                    logo_path=logo_path,
-                    size=logo_cfg["size"],
-                    opacity=logo_cfg["opacity"],
-                    x_offset=logo_cfg["x_offset"],
-                    y_offset=logo_cfg["y_offset"],
-                )
-            except Exception as exc:
-                results["success"] = False
-                results["error_msg"] = f"Błąd nakładania logo w {deliver}: {exc}"
-                return results
+            if not os.path.isfile(logo_path):
+                logger.warning(f"[PROCESS] BRAK LOGO: {os.path.dirname(photo_path)} — eksport bez watermarku")
+                final_img = img_conv
+            else:
+                try:
+                    final_img = apply_watermark(
+                        base=img_conv,
+                        logo_path=logo_path,
+                        size=logo_cfg["size"],
+                        opacity=logo_cfg["opacity"],
+                        x_offset=logo_cfg["x_offset"],
+                        y_offset=logo_cfg["y_offset"],
+                    )
+                except Exception as exc:
+                    results["success"] = False
+                    results["error_msg"] = f"Błąd nakładania logo w {deliver}: {exc}"
+                    logger.error(f"[PROCESS] Błąd watermark: {folder_name}/{photo_name} profil={deliver} — {exc}")
+                    return results
 
             # Nazwa pliku eksportu
             created_tag = created_date.replace(" ", "_").replace(":", "-")
@@ -300,8 +316,10 @@ def process_photo_task(
                     raise ValueError(f"Nieznany format eksportu: {fmt!r}")
 
                 export_path = os.path.join(export_folder, deliver, export_name + ext)
+                os.makedirs(os.path.join(export_folder, deliver), exist_ok=True)
                 final_img.save(export_path, **save_args, exif=exif.tobytes() if fmt == "JPEG" else None)
                 results["exported"][deliver] = export_path
+                logger.info(f"[PROCESS] Eksport '{deliver}' zapisany: {export_path}")
 
             except Exception as exc:
                 results["success"] = False
@@ -309,6 +327,9 @@ def process_photo_task(
                 return results
 
         results["duration"] = round(time.perf_counter() - start_time, 4)
+        exported_count = len(results["exported"])
+        logger.info(f"[PROCESS] Zakończono: {folder_name}/{photo_name} — "
+                    f"{exported_count} eksportów w {results['duration']:.2f}s")
         return results
 
     except Exception as exc:
@@ -547,6 +568,7 @@ def get_all_exif(img: Image.Image) -> dict[str, str]:
     except Exception as exc:
         logger.debug(f"Błąd ekstrakcji ICC: {exc}")
 
+    logger.debug(f"[EXIF] Odczytano {len(metadata)} tagów z obrazu")
     return metadata
 
 

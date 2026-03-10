@@ -4,9 +4,12 @@ Panel boczny wyświetlający szczegóły wybranego zdjęcia (EXIF, stan eksportu
 """
 from __future__ import annotations
 
+import logging
 import tkinter as tk
 from tkinter import ttk
 from typing import TYPE_CHECKING, Dict, Any
+
+logger = logging.getLogger("Yapa_CM")
 
 if TYPE_CHECKING:
     from bid.app import MainApp
@@ -65,6 +68,7 @@ class DetailsPanel(ttk.Frame):
             photo: Nazwa pliku.
             meta: Metadane zdjęcia z source_dict.
         """
+        logger.debug(f"[UI] Aktualizacja panelu dla: {folder}/{photo}")
         # --- EXIF ---
         for item in self.exif_tree.get_children():
             self.exif_tree.delete(item)

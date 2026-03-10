@@ -21,43 +21,12 @@ logger = logging.getLogger("Yapa_CM")
 # Domyślna konfiguracja eksportu (kopiowana gdy brakuje export_option.json)
 # ---------------------------------------------------------------------------
 DEFAULT_EXPORT_OPTIONS: dict = {
-    "fb": {
-        "size_type": "longer",
-        "size": 1200,
-        "format": "PNG",
-        "quality": 9,
-        "logo": {
-            "landscape": {"size": 240, "opacity": 60, "x_offset": 10, "y_offset": 10},
-            "portrait":  {"size": 312, "opacity": 60, "x_offset": 10, "y_offset": 10},
-        },
-    },
-    "insta": {
-        "size_type": "width",
-        "size": 1080,
-        "format": "PNG",
-        "quality": 9,
-        "logo": {
-            "landscape": {"size": 228, "opacity": 60, "x_offset": 10, "y_offset": 10},
-            "portrait":  {"size": 296, "opacity": 60, "x_offset": 10, "y_offset": 10},
-        },
-    },
-    "insta_q": {
-        "ratio": [1],
-        "size_type": "width",
-        "size": 1200,
-        "format": "PNG",
-        "quality": 9,
-        "logo": {
-            "landscape": {"size": 312, "opacity": 60, "x_offset": 10, "y_offset": 10},
-            "portrait":  {"size": 312, "opacity": 60, "x_offset": 10, "y_offset": 10},
-        },
-    },
     "lzp": {
-        "ratio": [0.8, 1.25],
+        "ratio": [0.8],
         "size_type": "longer",
-        "size": 1500,
-        "format": "PNG",
-        "quality": 9,
+        "size": 1350,
+        "format": "JPEG",
+        "quality": 88,
         "logo": {
             "landscape": {"size": 260, "opacity": 60, "x_offset": 10, "y_offset": 10},
             "portrait":  {"size": 332, "opacity": 60, "x_offset": 10, "y_offset": 10},
@@ -70,8 +39,11 @@ DEFAULT_EXPORT_OPTIONS: dict = {
 # Wizard
 # ---------------------------------------------------------------------------
 
-class SetupWizard(tk.Tk):
-    """Okno kreatora pierwszego uruchomienia.
+class SetupWizard(tk.Toplevel):
+    """Okno kreatora pierwszego uruchomienia — uruchamiane jako Toplevel.
+
+    Nigdy nie tworzy własnej instancji tk.Tk, aby uniknąć błędu:
+    ``Tcl_AsyncDelete: async handler deleted by the wrong thread``.
 
     Po zakończeniu (kliknięcie 'Zakończ') zapisuje settings.json
     i ewentualnie export_option.json, a następnie zamyka okno.
@@ -80,6 +52,7 @@ class SetupWizard(tk.Tk):
 
     def __init__(
         self,
+        parent: tk.Misc,
         settings_path: Path | None = None,
         export_options_path: Path | None = None,
         missing_settings: bool = True,
@@ -87,12 +60,13 @@ class SetupWizard(tk.Tk):
     ) -> None:
         """
         Args:
+            parent:              Rodzic (istniejąca instancja Tk lub Toplevel).
             settings_path:       Docelowa ścieżka settings.json (nieużywana w nowym modelu).
             export_options_path: Docelowa ścieżka export_option.json (nieużywana w nowym modelu).
             missing_settings:    Czy settings.json nie istnieje / jest błędny.
             missing_export:      Czy export_option.json nie istnieje / jest błędny.
         """
-        super().__init__()
+        super().__init__(parent)
         self.settings_path = settings_path
         self.export_options_path = export_options_path
         self.missing_settings = missing_settings
@@ -296,8 +270,7 @@ class SetupWizard(tk.Tk):
             )
             self.completed = True
             logger.info(f"Utworzono projekt: {name} → {self.project_path}")
-            self.withdraw()
-            self.quit()
+            self.destroy()  # triggers wait_window() return in parent
         except FileExistsError as exc:
             messagebox.showerror("Projekt już istnieje", f"Projekt o nazwie '{name}' już istnieje. Podaj inną nazwę.")
             return
@@ -308,8 +281,7 @@ class SetupWizard(tk.Tk):
     def _on_cancel(self) -> None:
         """Zamyka wizard bez zapisywania."""
         self.completed = False
-        self.withdraw()
-        self.quit()
+        self.destroy()
 
     # ------------------------------------------------------------------
     # Pomocnicze
@@ -334,21 +306,22 @@ class SetupWizard(tk.Tk):
 # Funkcja pomocnicza — do wywołania z main.py
 # ---------------------------------------------------------------------------
 
-def run_wizard_if_needed() -> tuple[bool, Path | None]:
-    """Wyświetla kreatora projektu.
+def run_wizard_if_needed(parent: tk.Misc) -> tuple[bool, Path | None]:
+    """Wyświetla kreator projektu jako modalny Toplevel.
+
+    WYMAGA istniejącej instancji tk.Tk jako 'parent'. Nie tworzy własnej tk.Tk,
+    co zapobiega błędowi ``Tcl_AsyncDelete: async handler deleted by the wrong thread``.
+
+    Args:
+        parent: Istniejące okno Tkinter (np. instancja MainApp).
 
     Returns:
         Krotka (success, project_path).
     """
     logger.info("Uruchamiam kreator projektu.")
 
-    wizard = SetupWizard()
-    wizard.mainloop()
-    
-    res = (wizard.completed, wizard.project_path)
-    try:
-        wizard.destroy()
-    except:
-        pass
-        
-    return res
+    wizard = SetupWizard(parent)
+    wizard.grab_set()           # modal — blokuje interakcję z głównym oknem
+    parent.wait_window(wizard)  # blokuje do czasu zamknięcia Toplevel
+
+    return (wizard.completed, wizard.project_path)

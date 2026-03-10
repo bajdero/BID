@@ -1,4 +1,9 @@
 # BID — Python dependencies
 # Install with: pip install -r requirements.txt
 
+# Production
 Pillow>=10.0.0
+
+# Testing
+pytest>=7.0
+pytest-html>=4.0
