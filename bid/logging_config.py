@@ -1,6 +1,6 @@
 """
 bid/logging_config.py
-Centralna konfiguracja loggera Yapa_CM.
+Centralna konfiguracja loggera BID.
 Testy mogą importować setup_logger() aby skonfigurować logger bez uruchamiania main.py.
 """
 from __future__ import annotations
@@ -9,7 +9,7 @@ import datetime
 import logging
 from pathlib import Path
 
-LOGGER_NAME = "Yapa_CM"
+LOGGER_NAME = "BID"
 
 def setup_logger(
     level: int = logging.INFO,
@@ -17,7 +17,7 @@ def setup_logger(
     console: bool = True,
     file: bool = True,
 ) -> logging.Logger:
-    """Konfiguruje i zwraca loggera Yapa_CM.
+    """Konfiguruje i zwraca loggera BID.
     
     Args:
         level: Poziom logowania.

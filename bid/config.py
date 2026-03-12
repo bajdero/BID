@@ -10,7 +10,7 @@ import json
 import logging
 from pathlib import Path
 
-logger = logging.getLogger("Yapa_CM")
+logger = logging.getLogger("BID")
 
 # Katalog projektu = katalog nadrzędny względem tego pliku (bid/)
 PROJECT_DIR: Path = Path(__file__).parent.parent

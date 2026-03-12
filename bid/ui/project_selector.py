@@ -5,7 +5,7 @@ from pathlib import Path
 import os
 from bid.project_manager import ProjectManager
 
-logger = logging.getLogger("Yapa_CM")
+logger = logging.getLogger("BID")
 
 class ProjectSelector(tk.Toplevel):
     """Okno wyboru projektu — uruchamiane jako Toplevel w​ istniejącej instancji Tk.

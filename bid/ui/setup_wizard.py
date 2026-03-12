@@ -15,7 +15,7 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 from typing import Callable
 
-logger = logging.getLogger("Yapa_CM")
+logger = logging.getLogger("BID")
 
 # ---------------------------------------------------------------------------
 # Domyślna konfiguracja eksportu (kopiowana gdy brakuje export_option.json)
@@ -27,9 +27,10 @@ DEFAULT_EXPORT_OPTIONS: dict = {
         "size": 1350,
         "format": "JPEG",
         "quality": 88,
+        "logo_required": False,
         "logo": {
-            "landscape": {"size": 260, "opacity": 60, "x_offset": 10, "y_offset": 10},
-            "portrait":  {"size": 332, "opacity": 60, "x_offset": 10, "y_offset": 10},
+            "landscape": {"size": 260, "opacity": 60, "x_offset": 10, "y_offset": 10, "placement": "bottom-right"},
+            "portrait":  {"size": 332, "opacity": 60, "x_offset": 10, "y_offset": 10, "placement": "bottom-right"},
         },
     },
 }
@@ -261,6 +262,13 @@ class SetupWizard(tk.Toplevel):
         
         if not name or not source or not export:
             self._status_var.set("⚠  Podaj nazwę projektu i oba foldery.")
+            return
+
+        from bid.validators import validate_source_export_different
+        err = validate_source_export_different(source, export)
+        if err:
+            from tkinter import messagebox
+            messagebox.showwarning("Nieprawidłowe foldery", err)
             return
 
         try:

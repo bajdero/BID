@@ -40,12 +40,14 @@ from bid.source_manager import (
     load_source_dict,
     save_source_dict,
     update_source_dict,
+    monitor_incomplete_files,
 )
 from bid.ui.preview import PrevWindow
 from bid.ui.source_tree import SourceTree
 from bid.ui.details_panel import DetailsPanel
+from bid.ui.toast import init_toasts, show_toast
 
-logger = logging.getLogger("Yapa_CM")
+logger = logging.getLogger("BID")
 
 
 class MainApp(tk.Tk):
@@ -182,16 +184,20 @@ class MainApp(tk.Tk):
         self.executor = ThreadPoolExecutor(max_workers=self.max_workers)
 
         self.update_source_thread: threading.Thread | None = None
+        self.file_monitor_thread: threading.Thread | None = None
         self.find_new: bool = False
         self.dict_lock = threading.Lock()
         self._stop_event = threading.Event()
         self._update_queue: queue.Queue = queue.Queue(maxsize=1)
+        self._monitor_queue: queue.Queue = queue.Queue(maxsize=1)
 
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
         self.deiconify()  # show main window now that init is complete
         self._running = True
 
+        init_toasts(self)  # inicjalizuj system powiadomień
+        self.monitor_incomplete()  # Start background file monitor
         self.update_source()
         self.scan_photos()
 
@@ -266,9 +272,40 @@ class MainApp(tk.Tk):
         action_menu = tk.Menu(menubar, tearoff=0)
         action_menu.add_command(label="Aktualizuj listę (Scan source)", command=self.update_source)
         action_menu.add_command(label="Rozpocznij eksport", command=self.scan_photos)
+        action_menu.add_separator()
+        action_menu.add_command(label="Nowy profil eksportu...", command=self.on_new_export_profile)
         menubar.add_cascade(label="Akcje", menu=action_menu)
 
         self.config(menu=menubar)
+
+    def on_new_export_profile(self) -> None:
+        """Otwiera kreator nowego profilu eksportu."""
+        from bid.ui.export_wizard import run_export_profile_wizard
+        import json
+        success, name, profile = run_export_profile_wizard(parent=self)
+        if not success:
+            return
+        if name in self.export_settings:
+            messagebox.showerror(
+                "Profil już istnieje",
+                f"Profil '{name}' już istnieje. Zmień nazwę lub usuń stary profil."
+            )
+            return
+        self.export_settings[name] = profile
+        # Utwórz folder eksportu dla nowego profilu
+        dest = os.path.join(self.export_folder, name)
+        os.makedirs(dest, exist_ok=True)
+        # Zapisz zaktualizowaną konfigurację
+        export_options_path = self.project_path / "export_option.json"
+        try:
+            with open(export_options_path, "w", encoding="utf-8") as f:
+                json.dump(self.export_settings, f, ensure_ascii=False, indent=4)
+            logger.info(f"Zapisano nowy profil eksportu: {name}")
+        except Exception as exc:
+            messagebox.showerror("Błąd zapisu", f"Nie można zapisać profilu eksportu: {exc}")
+            return
+        # Uruchom skanowanie — nowy profil będzie przetworzony dla plików NEW
+        self.scan_photos()
 
     def on_open_project(self) -> None:
         """Otwiera dialog wyboru folderu projektu."""
@@ -367,6 +404,7 @@ class MainApp(tk.Tk):
         with self.dict_lock:
             if not result["success"]:
                 self._mark_error_locked(folder, photo, result["error_msg"])
+                show_toast(f"Błąd przetwarzania: {folder}/{photo}", level="error")
                 return
 
             self.source_dict[folder][photo]["state"] = SourceState.OK
@@ -462,6 +500,101 @@ class MainApp(tk.Tk):
             for state in folder_changes.values()
         )
         if needs_scan:
+            self.scan_photos()
+
+    # ================================================================
+    # Background File Monitoring (DOWNLOADING → NEW transitions)
+    # ================================================================
+
+    def monitor_incomplete(self) -> None:
+        """Planuje cykliczne monitorowanie niedokończonych plików (co 2 sekundy).
+        
+        FIX-ASYNC: Runs monitor_incomplete_files() in background to update
+        DOWNLOADING files to NEW when they're stable/ready.
+        """
+        if self._stop_event.is_set():
+            return
+        if self.file_monitor_thread is not None and self.file_monitor_thread.is_alive():
+            # Already running
+            pass
+        else:
+            # Start new monitor thread
+            self.file_monitor_thread = threading.Thread(
+                target=self._monitor_incomplete_worker, daemon=True, name="FileMonitor"
+            )
+            self.file_monitor_thread.start()
+        
+        self.after(100, self._poll_monitor_incomplete)
+
+    def _monitor_incomplete_worker(self) -> None:
+        """Wątek roboczy monitorowania niedokończonych plików.
+        
+        FIX-ASYNC: Periodically checks DOWNLOADING files and updates them to NEW
+        when they become stable. Runs blocking is_file_stable() in background.
+        """
+        while not self._stop_event.is_set():
+            try:
+                with self.dict_lock:
+                    # Check for DOWNLOADING files and update when ready
+                    monitor_updates = monitor_incomplete_files(
+                        self.source_dict,
+                        check_interval=2.0,
+                    )
+                
+                # Send updates to UI thread via queue
+                if monitor_updates:
+                    try:
+                        self._monitor_queue.put_nowait(monitor_updates)
+                    except queue.Full:
+                        pass  # main thread still processing previous result
+
+                # Wait before next cycle (2 seconds is built into monitor_incomplete_files)
+                time.sleep(2)
+
+            except Exception as exc:
+                logger.error(f"Błąd monitorowania niedokończonych plików: {exc}")
+                time.sleep(2)
+
+    def _poll_monitor_incomplete(self) -> None:
+        """Odpytuje kolejkę wyników monitorowania — wywoływane tylko na głównym wątku.
+        
+        FIX-ASYNC: When DOWNLOADING files become ready, updates UI and triggers
+        re-scan for processing.
+        """
+        if self._stop_event.is_set():
+            return
+        try:
+            monitor_updates = self._monitor_queue.get_nowait()
+            self._sync_ui_after_monitoring(monitor_updates)
+        except queue.Empty:
+            pass
+        finally:
+            self.after(100, self._poll_monitor_incomplete)
+
+    def _sync_ui_after_monitoring(self, monitor_updates: dict) -> None:
+        """UI sync dla rezultatów monitorowania — wywoływane w main thread.
+        
+        FIX-ASYNC: Applies DOWNLOADING → NEW transitions to UI and triggers
+        re-scan for processing.
+        
+        Args:
+            monitor_updates: Dictionary {folder: {file: is_ready_bool}}
+        """
+        # Count actual transitions (files becoming ready)
+        ready_count = 0
+        for folder, files_dict in monitor_updates.items():
+            for file_name, is_ready in files_dict.items():
+                if is_ready:
+                    # Update state in source_dict
+                    if folder in self.source_dict and file_name in self.source_dict[folder]:
+                        self.source_dict[folder][file_name]["state"] = SourceState.NEW
+                        ready_count += 1
+        
+        # If any files became ready, update UI and trigger scanning
+        if ready_count > 0:
+            logger.info(f"Monitor: {ready_count} files ready for processing")
+            self.source_tree.update_tree(self.source_dict)
+            save_source_dict(self.source_dict, self.project_path)
             self.scan_photos()
 
     def _mark_error_locked(self, folder: str, photo: str, msg: str) -> None:

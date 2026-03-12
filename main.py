@@ -22,7 +22,7 @@ def _setup_logging(level: int = logging.INFO) -> None:
     Args:
         level: Poziom logowania (domyślnie INFO).
     """
-    logger = logging.getLogger("Yapa_CM")
+    logger = logging.getLogger("BID")
     logger.setLevel(level)
 
     fmt = logging.Formatter(
@@ -89,7 +89,7 @@ if __name__ == "__main__":
     args = _parse_args()
     _setup_logging(logging.DEBUG if args.debug else logging.INFO)
 
-    logger = logging.getLogger("Yapa_CM")
+    logger = logging.getLogger("BID")
     logger.info("Uruchamianie BID")
 
     from bid.app import MainApp

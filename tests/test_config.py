@@ -215,7 +215,7 @@ def test_validate_export_profile_valid_ratio(log_capture):
         "format": "JPEG",
         "quality": 85,
         "logo": {},
-        "ratio": [[1.33, 1.78], [0.75, 1.25]]  # poprawny format
+        "ratio": [1.33, 0.75]  # poprawny format: lista liczb zmiennoprzecinkowych
     }
     
     errors = validate_export_profile("fb", profile)

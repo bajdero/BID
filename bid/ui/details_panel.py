@@ -9,7 +9,7 @@ import tkinter as tk
 from tkinter import ttk
 from typing import TYPE_CHECKING, Dict, Any
 
-logger = logging.getLogger("Yapa_CM")
+logger = logging.getLogger("BID")
 
 if TYPE_CHECKING:
     from bid.app import MainApp
@@ -73,11 +73,36 @@ class DetailsPanel(ttk.Frame):
         for item in self.exif_tree.get_children():
             self.exif_tree.delete(item)
         
-        # Podstawowe info na górze
+        # Podstawowe info na górze (sekcja pogrubiona)
+        exif_dict = meta.get("exif", {})
+
+        # Autor z EXIF (Artist) lub pusty jeśli brak
+        artist_raw = exif_dict.get("Artist", "")
+        if not artist_raw or not str(artist_raw).strip():
+            logger.warning(f"[UI] Brak pola Artist w EXIF: {folder}/{photo}")
+            artist_display = ""
+        else:
+            artist_display = str(artist_raw).strip()
+
+        # Wymiary w pikselach i proporcje
+        img_w = exif_dict.get("ImageWidth", "") or exif_dict.get("ExifImageWidth", "")
+        img_h = exif_dict.get("ImageLength", "") or exif_dict.get("ExifImageHeight", "")
+        try:
+            w_int = int(str(img_w).split()[0]) if img_w else 0
+            h_int = int(str(img_h).split()[0]) if img_h else 0
+        except (ValueError, IndexError):
+            w_int, h_int = 0, 0
+
+        pixel_display = f"{w_int} x {h_int}" if w_int and h_int else "---"
+        ratio_display = f"{round(w_int / h_int, 2)}" if w_int and h_int else "---"
+
         basic_tags = {
             "Rozmiar": meta.get("size", "---"),
             "Data": meta.get("created", "---"),
             "Stan": meta.get("state", "---"),
+            "Autor": artist_display,
+            "Piksele": pixel_display,
+            "Proporcje": ratio_display,
         }
         for k, v in basic_tags.items():
             self.exif_tree.insert("", "end", text=k, values=(v,), tags=("bold",))

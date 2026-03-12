@@ -7,12 +7,14 @@ from __future__ import annotations
 
 import io
 import logging
+import re
+import warnings
 from functools import lru_cache
 from typing import Literal, Any
 
 from PIL import Image, ImageCms, ExifTags
 
-logger = logging.getLogger("Yapa_CM")
+logger = logging.getLogger("BID")
 
 
 @lru_cache(maxsize=32)
@@ -122,30 +124,44 @@ def apply_watermark(
     opacity: int,
     x_offset: int,
     y_offset: int,
+    placement: str = "bottom-right",
 ) -> Image.Image:
     """Ładuje logo, skaluje je, ustawia przezroczystość i nakłada na obraz.
 
     Args:
-        base:     Obraz bazowy (RGB lub RGBA).
+        base:      Obraz bazowy (RGB lub RGBA).
         logo_path: Ścieżka do pliku logo (PNG z kanałem alpha).
-        size:     Docelowy rozmiar dłuższego boku logo w px.
-        opacity:  Przezroczystość logo (0–100).
-        x_offset: Odległość prawej krawędzi logo od prawej krawędzi obrazu (px).
-        y_offset: Odległość dolnej krawędzi logo od dolnej krawędzi obrazu (px).
+        size:      Docelowy rozmiar dłuższego boku logo w px.
+        opacity:   Przezroczystość logo (0–100).
+        x_offset:  Odległość logo od krawędzi poziomej (px).
+        y_offset:  Odległość logo od krawędzi pionowej (px).
+        placement: Narożnik: "top-left", "top-right", "bottom-left", "bottom-right".
 
     Returns:
         Obraz RGB z nałożonym watermarkiem.
     """
-    logger.debug(f"Nakładam watermark z {logo_path} (rozmiar={size}, opacity={opacity})")
+    logger.debug(f"Nakładam watermark z {logo_path} (rozmiar={size}, opacity={opacity}, placement={placement})")
 
     full_logo = get_logo(logo_path)
     logo = image_resize(full_logo, size, resamle=Image.NEAREST)
     logo = image_change_alpha(logo, opacity)
 
+    # Oblicz pozycję w zależności od narożnika
+    if placement == "top-left":
+        pos_x = x_offset
+        pos_y = y_offset
+    elif placement == "top-right":
+        pos_x = base.width - x_offset - logo.width
+        pos_y = y_offset
+    elif placement == "bottom-left":
+        pos_x = x_offset
+        pos_y = base.height - y_offset - logo.height
+    else:  # "bottom-right" (domyślny)
+        pos_x = base.width - x_offset - logo.width
+        pos_y = base.height - y_offset - logo.height
+
     # Tworzymy przezroczystą warstwę o rozmiarze bazowego obrazu
     logo_layer = Image.new("RGBA", base.size)
-    pos_x = base.width - x_offset - logo.width
-    pos_y = base.height - y_offset - logo.height
     logo_layer.paste(logo, (pos_x, pos_y))
 
     # Kompozytujemy
@@ -194,7 +210,10 @@ def process_photo_task(
     try:
         # ---- Wczytywanie ----
         try:
-            raw_photo = Image.open(photo_path)
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore", category=UserWarning, module="PIL.TiffImagePlugin")
+                raw_photo = Image.open(photo_path)
+                raw_photo.load()  # force-load data while warnings are suppressed
         except Exception as exc:
             results["success"] = False
             results["error_msg"] = f"Błąd otwarcia pliku '{photo_path}': {exc}"
@@ -215,7 +234,17 @@ def process_photo_task(
         exif[0x00FE] = 0x1
         exif[0x0106] = 2
         exif[0x0112] = 0
-        exif[0x013B] = folder_name.encode("utf-8")
+
+        # Artist (0x013B): zachowaj oryginalnego autora z EXIF; jeśli brak — użyj folder_name
+        _raw_artist = raw_photo.getexif().get(0x013B)
+        if isinstance(_raw_artist, bytes):
+            _raw_artist = _raw_artist.decode("utf-8", errors="ignore").strip("\x00 ")
+        if _raw_artist and str(_raw_artist).strip():
+            exif[0x013B] = _raw_artist if isinstance(_raw_artist, bytes) else _raw_artist.encode("utf-8")
+        else:
+            logger.warning(f"[PROCESS] Brak autora w EXIF — użyto nazwy folderu: {folder_name}")
+            exif[0x013B] = folder_name.encode("utf-8")
+
         exif[0xC71B] = now.strftime("%Y:%m:%d %H:%M:%S")
 
         orientation = "landscape" if raw_photo.width >= raw_photo.height else "portrait"
@@ -234,7 +263,7 @@ def process_photo_task(
             ratios = d_cfg.get("ratio")
             if ratios is not None:
                 actual = round(raw_photo.width / raw_photo.height, 2)
-                if actual not in ratios:
+                if not any(abs(actual - r) < 0.01 for r in ratios):
                     logger.debug(f"[PROCESS] Pomijam '{deliver}' — ratio {actual} poza zakresem {ratios}")
                     continue
 
@@ -270,8 +299,12 @@ def process_photo_task(
             # photo_path to pełna ścieżka.
             logo_path = os.path.join(os.path.dirname(photo_path), "logo.png")
             logo_cfg = d_cfg["logo"][orientation]
+            logo_required = d_cfg.get("logo_required", False)
             if not os.path.isfile(logo_path):
                 logger.warning(f"[PROCESS] BRAK LOGO: {os.path.dirname(photo_path)} — eksport bez watermarku")
+                if logo_required:
+                    logger.warning(f"[PROCESS] Logo wymagane w profilu '{deliver}' — pomijam folder {os.path.dirname(photo_path)}")
+                    continue
                 final_img = img_conv
             else:
                 try:
@@ -282,6 +315,7 @@ def process_photo_task(
                         opacity=logo_cfg["opacity"],
                         x_offset=logo_cfg["x_offset"],
                         y_offset=logo_cfg["y_offset"],
+                        placement=logo_cfg.get("placement", "bottom-right"),
                     )
                 except Exception as exc:
                     results["success"] = False
@@ -292,8 +326,9 @@ def process_photo_task(
             # Nazwa pliku eksportu
             created_tag = created_date.replace(" ", "_").replace(":", "-")
             orig_stem = os.path.splitext(photo_name)[0]
-            folder_tag = folder_name.replace(" ", "_")
-            export_name = f"YAPA{created_tag}_{folder_tag}_{orig_stem}"
+            folder_tag = re.sub(r'[<>:"/\\|?*]', '_', folder_name.replace(" ", "_"))
+            safe_stem = re.sub(r'[<>:"/\\|?*]', '_', orig_stem)
+            export_name = f"YAPA{created_tag}_{folder_tag}_{safe_stem}"
 
             # Zapis
             fmt = d_cfg["format"]
@@ -307,8 +342,8 @@ def process_photo_task(
                     png_meta = PngInfo()
                     png_meta.add_text("Artist", folder_name)
                     png_meta.add_text("OriginalRawFileName", photo_name)
-                    png_meta.add_text("DocumentName", "YAPA")
-                    png_meta.add_text("ImageDescription", "YAPA")
+                    png_meta.add_text("DocumentName", "BID")
+                    png_meta.add_text("ImageDescription", "BID")
                     png_meta.add_text("DateTimeOriginal", created_date)
                     png_meta.add_text("PreviewDateTime", now.strftime("%Y:%m:%d %H:%M:%S"))
                     save_args = {"format": "PNG", "optimize": True, "compress_level": d_cfg["quality"], "pnginfo": png_meta}

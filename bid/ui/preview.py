@@ -15,7 +15,7 @@ from PIL import Image, ImageTk
 
 from bid.image_processing import image_resize
 
-logger = logging.getLogger("Yapa_CM")
+logger = logging.getLogger("BID")
 
 
 class PrevWindow(tk.Frame):
