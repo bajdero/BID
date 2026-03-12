@@ -143,11 +143,14 @@ class SourceTree(tk.Frame):
                         tags=meta["state"],
                     )
                 except _tkinter.TclError:
-                    # Plik już istnieje — odśwież tylko tag i ikonę
+                    # Plik już istnieje — odśwież tag, ikonę i wartości (rozmiar, data)
                     try:
                         icon = _STATE_ICON.get(meta["state"], "")
                         self.source_tree.item(
-                            f"{folder}_{file}", tags=meta["state"], text=f"{icon}{file}"
+                            f"{folder}_{file}",
+                            tags=meta["state"],
+                            text=f"{icon}{file}",
+                            values=[meta["size"], meta["created"], meta["path"]]
                         )
                     except _tkinter.TclError:
                         pass

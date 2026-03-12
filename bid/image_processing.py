@@ -603,6 +603,15 @@ def get_all_exif(img: Image.Image) -> dict[str, str]:
     except Exception as exc:
         logger.debug(f"Błąd ekstrakcji ICC: {exc}")
 
+    # 6. Fallback: if no dimension tags found in EXIF, use PIL's actual image size.
+    # Some cameras/phones omit ImageWidth/ImageLength (IFD0) and
+    # ExifImageWidth/ExifImageHeight (ExifIFD) entirely.
+    # PIL's .width/.height always reflects the true decoded image dimensions.
+    if not any(k in metadata for k in ("ImageWidth", "ExifImageWidth")):
+        metadata["ImageWidth"] = str(img.width)
+    if not any(k in metadata for k in ("ImageLength", "ExifImageHeight")):
+        metadata["ImageLength"] = str(img.height)
+
     logger.debug(f"[EXIF] Odczytano {len(metadata)} tagów z obrazu")
     return metadata
 
