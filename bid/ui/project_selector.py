@@ -141,7 +141,7 @@ class ProjectSelector(tk.Toplevel):
 
         path = selection[0]
         self.selected_project = Path(path)
-        logger.info(f"[UI] Wybrano projekt: {self.selected_project}")
+        logger.debug(f"[UI] Wybrano projekt: {self.selected_project}")
         self.destroy()  # triggers wait_window() return in parent
         return "break"
 
@@ -159,7 +159,7 @@ class ProjectSelector(tk.Toplevel):
             mustexist=True
         )
         if path:
-            logger.info(f"[UI] Przeglądanie projektu z: {path}")
+            logger.debug(f"[UI] Przeglądanie projektu z: {path}")
             if os.path.exists(os.path.join(path, "settings.json")):
                 self.selected_project = Path(path)
                 self.destroy()

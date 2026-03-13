@@ -79,7 +79,7 @@ class DetailsPanel(ttk.Frame):
         # Autor z EXIF (Artist) lub pusty jeśli brak
         artist_raw = exif_dict.get("Artist", "")
         if not artist_raw or not str(artist_raw).strip():
-            logger.warning(f"[UI] Brak pola Artist w EXIF: {folder}/{photo}")
+            logger.debug(f"[UI] Brak pola Artist w EXIF: {folder}/{photo}")
             artist_display = ""
         else:
             artist_display = str(artist_raw).strip()

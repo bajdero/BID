@@ -392,7 +392,8 @@ class MainApp(tk.Tk):
                 result = future.result()
                 self._handle_task_result(folder, photo, result)
             except Exception as exc:
-                self._mark_error(folder, photo, f"Błąd krytyczny procesu: {exc}")
+                with self.dict_lock:
+                    self._mark_error_locked(folder, photo, f"Błąd krytyczny procesu: {exc}")
         
         if done_futures:
             save_source_dict(self.source_dict, self.project_path)
@@ -412,9 +413,9 @@ class MainApp(tk.Tk):
             self.source_dict[folder][photo]["state"] = SourceState.OK
             self.source_dict[folder][photo]["duration_sec"] = result["duration"]
             self.source_dict[folder][photo]["exported"].update(result["exported"])
-        
-        logger.debug(f"[PERF] Zdjęcie {folder}/{photo} przetworzone w {result['duration']:.4f}s")
-        self.source_tree.change_tag(folder, photo, SourceState.OK)
+            
+            logger.debug(f"[PERF] Zdjęcie {folder}/{photo} przetworzone w {result['duration']:.4f}s")
+            self.source_tree.change_tag(folder, photo, SourceState.OK)
 
         # Aktualizacja postępu
         self.progress_bar["value"] += 1
