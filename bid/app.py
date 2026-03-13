@@ -332,7 +332,7 @@ class MainApp(tk.Tk):
         with self.dict_lock:
             # Policz zdjęcia do przetworzenia dla paska postępu
             total_new = sum(1 for f in self.source_dict for p in self.source_dict[f] 
-                            if self.source_dict[f][p]["state"] == SourceState.NEW)
+                            if self.source_dict[f][p]["state"] in (SourceState.NEW, SourceState.EXPORT_FAIL))
             
             if total_new > 0:
                 self.progress_bar["maximum"] = total_new
@@ -349,7 +349,7 @@ class MainApp(tk.Tk):
             # podczas iteracji, gdyby coś (np. worker) zmieniło dict w międzyczasie.
             for folder, photos in list(self.source_dict.items()):
                 for photo, meta in list(photos.items()):
-                    if meta["state"] == SourceState.NEW:
+                    if meta["state"] in (SourceState.NEW, SourceState.EXPORT_FAIL):
                         # Sprawdź czy już nie jest w kolejce do przetwarzania
                         if any((f, p) == (folder, photo) for f, p in self.active_scanning.values()):
                             continue
@@ -365,8 +365,14 @@ class MainApp(tk.Tk):
     def _submit_photo_task_locked(self, folder: str, photo: str) -> None:
         """Submit task — MUSI być wywołane wewnątrz with self.dict_lock."""
         meta = self.source_dict[folder][photo]
+        old_state = meta["state"]
         meta["state"] = SourceState.PROCESSING
-        logger.info(f"Kolejkuję: {folder}/{photo}")
+        
+        if old_state == SourceState.EXPORT_FAIL:
+            logger.info(f"Reprocesowanie (export_fail): {folder}/{photo}")
+        else:
+            logger.info(f"Kolejkuję: {folder}/{photo}")
+        
         self.source_tree.change_tag(folder, photo, SourceState.PROCESSING)
         
         future = self.executor.submit(
@@ -584,7 +590,7 @@ class MainApp(tk.Tk):
 
         # Jeśli cokolwiek wymaga przetworzenia — ruszamy kolejkę
         needs_scan = found_new or any(
-            state in (SourceState.NEW,)
+            state in (SourceState.NEW, SourceState.EXPORT_FAIL)
             for folder_changes in integrity_changes.values()
             for state in folder_changes.values()
         )
