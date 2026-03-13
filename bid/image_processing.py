@@ -7,7 +7,10 @@ from __future__ import annotations
 
 import io
 import logging
+import os
 import re
+import shutil
+import tempfile
 import warnings
 from functools import lru_cache
 from typing import Literal, Any
@@ -171,6 +174,68 @@ def apply_watermark(
     result = Image.alpha_composite(result, base_rgba)
     result = Image.alpha_composite(result, logo_layer)
     return result.convert("RGB")
+
+
+# ---------------------------------------------------------------------------
+# Safe File Saving with Temporary File
+# ---------------------------------------------------------------------------
+
+def save_image_safe(
+    image: Image.Image,
+    export_path: str,
+    save_args: dict,
+    exif_bytes: bytes | None = None,
+) -> None:
+    """Saves image to file using temporary file to prevent 0B files on error.
+    
+    Writes to a temporary file in the same directory first.
+    Only moves to final location if write succeeds.
+    This prevents creating 0B placeholder files when export fails.
+    
+    Args:
+        image: PIL Image object to save.
+        export_path: Final destination file path.
+        save_args: Dict of save parameters (format, quality, etc.).
+        exif_bytes: Optional EXIF data bytes (for JPEG).
+        
+    Raises:
+        Exception: Propagates any exception from image.save() or file operations.
+    """
+    # Ensure destination directory exists
+    export_dir = os.path.dirname(export_path)
+    os.makedirs(export_dir, exist_ok=True)
+    
+    # Create temporary file in same directory to ensure same filesystem
+    temp_fd, temp_path = tempfile.mkstemp(
+        dir=export_dir,
+        prefix='.bid_tmp_',
+        suffix=os.path.splitext(export_path)[1]
+    )
+    os.close(temp_fd)  # Close the file descriptor; PIL will open it
+    
+    try:
+        # Write to temporary file
+        if exif_bytes is not None:
+            image.save(temp_path, **save_args, exif=exif_bytes)
+        else:
+            image.save(temp_path, **save_args)
+        
+        # If successful, replace final file with temp file (atomic operation)
+        if os.path.exists(export_path):
+            os.remove(export_path)
+        shutil.move(temp_path, export_path)
+        logger.debug(f"[PROCESS] Zapisano (atomicznie): {export_path}")
+        
+    except Exception as exc:
+        # Clean up temp file if write failed
+        if os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+                logger.debug(f"[PROCESS] Czyszczenie nieudanego temp pliku: {temp_path}")
+            except OSError as cleanup_exc:
+                logger.debug(f"[PROCESS] Błąd czyszczenia temp: {cleanup_exc}")
+        # Re-raise original exception
+        raise exc
 
 
 # ---------------------------------------------------------------------------
@@ -351,8 +416,14 @@ def process_photo_task(
                     raise ValueError(f"Nieznany format eksportu: {fmt!r}")
 
                 export_path = os.path.join(export_folder, deliver, export_name + ext)
-                os.makedirs(os.path.join(export_folder, deliver), exist_ok=True)
-                final_img.save(export_path, **save_args, exif=exif.tobytes() if fmt == "JPEG" else None)
+                
+                # Use safe save to prevent 0B files on errors
+                save_image_safe(
+                    image=final_img,
+                    export_path=export_path,
+                    save_args=save_args,
+                    exif_bytes=exif.tobytes() if fmt == "JPEG" else None,
+                )
                 results["exported"][deliver] = export_path
                 logger.info(f"[PROCESS] Eksport '{deliver}' zapisany: {export_path}")
 

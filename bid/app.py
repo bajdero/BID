@@ -182,6 +182,7 @@ class MainApp(tk.Tk):
         self.active_scanning: dict[Future, tuple[str, str]] = {}
         self.max_workers: int = os.cpu_count() or 4
         self.executor = ThreadPoolExecutor(max_workers=self.max_workers)
+        self.scan_count: int = 0  # Counter for cleanup every 10 scans
 
         self.update_source_thread: threading.Thread | None = None
         self.file_monitor_thread: threading.Thread | None = None
@@ -327,6 +328,12 @@ class MainApp(tk.Tk):
 
     def scan_photos(self) -> None:
         """Uruchamia przetwarzanie nowych zdjęć w puli procesów."""
+        # Cleanup empty files every 10 scans
+        self.scan_count += 1
+        if self.scan_count % 10 == 0:
+            logger.info(f"[CLEANUP] Czyszczenie pustych plików eksportu (skan #{self.scan_count})")
+            self._cleanup_empty_exports()
+        
         with self.dict_lock:
             # Policz zdjęcia do przetworzenia dla paska postępu
             total_new = sum(1 for f in self.source_dict for p in self.source_dict[f] 
@@ -421,6 +428,40 @@ class MainApp(tk.Tk):
             self.status_label.config(text=f"Przetwarzanie... (Pozostało: {int(remaining)})")
         else:
             self.status_label.config(text="Zakończono przetwarzanie")
+
+    def _cleanup_empty_exports(self) -> None:
+        """Removes empty (0B) export files from export folders.
+        
+        Called automatically every 10 scans to clean up failed exports
+        that left behind empty placeholder files.
+        """
+        try:
+            export_dir = Path(self.export_folder)
+            if not export_dir.exists():
+                return
+            
+            deleted_count = 0
+            for profile_dir in export_dir.iterdir():
+                if not profile_dir.is_dir():
+                    continue
+                
+                # Check all files in profile directory
+                for export_file in profile_dir.iterdir():
+                    if export_file.is_file():
+                        try:
+                            # Check if file is exactly 0 bytes
+                            if export_file.stat().st_size == 0:
+                                logger.warning(f"[CLEANUP] Usuwam pusty plik eksportu (0B): {export_file}")
+                                export_file.unlink()
+                                deleted_count += 1
+                        except OSError as e:
+                            logger.debug(f"[CLEANUP] Błąd sprawdzenia pliku {export_file}: {e}")
+            
+            if deleted_count > 0:
+                logger.info(f"[CLEANUP] Usunięto {deleted_count} pustych plików eksportu")
+        
+        except Exception as exc:
+            logger.error(f"[CLEANUP] Błąd podczas czyszczenia pustych plików: {exc}")
 
     # Te funkcje są teraz zastąpione przez logic w image_processing.py i pool executor
     # def process_photo(self, folder: str, photo: str) -> None: ...
