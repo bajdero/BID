@@ -635,7 +635,7 @@ def check_integrity(
                 changes.setdefault(folder, {})[photo] = SourceState.NEW
                 continue
 
-            # ---- Sprawdzenie plików eksportowych (tylko OK) ----
+            # ---- Sprawdzenie plików eksportowych (tylko OK i error) ----
             # TODO: Trzeba dodać nowy state jeżeli fail jest z errorem błąd zapisu e <export> file is not seekable to wtedy state powinien być export_fail
             if state not in [SourceState.OK, SourceState.ERROR]:
                 continue
@@ -643,7 +643,19 @@ def check_integrity(
             exported: dict = meta.get("exported", {})
             for deliver in export_settings:
                 export_path = exported.get(deliver, "")
-                if export_path and not os.path.isfile(export_path):
+                
+                # If path is empty but file should exist, reconstruct expected path
+                if not export_path:
+                    d_cfg = export_settings[deliver]
+                    ext = ".jpg" if d_cfg.get("format") == "JPEG" else ".png"
+                    created_tag = meta.get("created", "").replace(" ", "_").replace(":", "-")
+                    orig_stem = os.path.splitext(photo)[0]
+                    folder_tag = _sanitize_filename(folder.replace(" ", "_"))
+                    export_base_name = f"YAPA{created_tag}_{folder_tag}_{_sanitize_filename(orig_stem)}"
+                    export_path = os.path.normpath(os.path.join(export_folder, deliver, export_base_name + ext))
+                
+                # Now check if the file exists
+                if not os.path.isfile(export_path):
                     logger.warning(
                     f"[INTEGRITY] Brak pliku eksportu '{deliver}' — "
                     f"reprocessing: {folder}/{photo}"
