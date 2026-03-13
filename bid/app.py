@@ -328,11 +328,6 @@ class MainApp(tk.Tk):
 
     def scan_photos(self) -> None:
         """Uruchamia przetwarzanie nowych zdjęć w puli procesów."""
-        # Cleanup empty files every 10 scans
-        self.scan_count += 1
-        if self.scan_count % 10 == 0:
-            logger.info(f"[CLEANUP] Czyszczenie pustych plików eksportu (skan #{self.scan_count})")
-            self._cleanup_empty_exports()
         
         with self.dict_lock:
             # Policz zdjęcia do przetworzenia dla paska postępu
@@ -458,7 +453,7 @@ class MainApp(tk.Tk):
                                 export_file.unlink()
                                 deleted_count += 1
                         except OSError as e:
-                            logger.debug(f"[CLEANUP] Błąd sprawdzenia pliku {export_file}: {e}")
+                            logger.error(f"[CLEANUP] Błąd sprawdzenia pliku {export_file}: {e}")
             
             # Clean up tmp directory
             tmp_dir = export_dir / "tmp"
@@ -507,6 +502,11 @@ class MainApp(tk.Tk):
     def _update_source_worker(self) -> None:
         """Wątek roboczy cyklicznego odświeżania source_dict. NIE wywołuje Tkinter."""
         logger.debug("Cykliczne sprawdzanie source i integralności")
+        # Cleanup empty files every 10 scans
+        self.scan_count += 1
+        if self.scan_count % 10 == 0:
+            logger.info(f"[CLEANUP] Czyszczenie pustych plików eksportu (skan #{self.scan_count})")
+            self._cleanup_empty_exports()
         try:
             with self.dict_lock:
                 # 1. Nowe pliki
