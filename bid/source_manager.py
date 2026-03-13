@@ -270,6 +270,7 @@ class SourceState:
     OK         = "ok"
     OK_OLD     = "ok_old"    # znaleziono istniejące eksporty (np. po odbudowie bazy)
     ERROR      = "error"
+    EXPORT_FAIL = "export_fail"  # Eksport usunięty lub pusty, wymaga ponownego przetwarzania
     DELETED    = "deleted"   # plik źródłowy usunięty z dysku
     SKIP       = "skip"      # użytkownik ręcznie pominął plik
 
@@ -636,34 +637,81 @@ def check_integrity(
                 continue
 
             # ---- Sprawdzenie plików eksportowych (tylko OK i error) ----
-            # TODO: Trzeba dodać nowy state jeżeli fail jest z errorem błąd zapisu e <export> file is not seekable to wtedy state powinien być export_fail
-            if state not in [SourceState.OK, SourceState.ERROR]:
+            # TODO: Treba zaimplementować export_fail w reszcie kodu
+            if state not in [SourceState.OK, SourceState.ERROR, SourceState.EXPORT_FAIL]:
                 continue
 
             exported: dict = meta.get("exported", {})
-            for deliver in export_settings:
-                export_path = exported.get(deliver, "")
-                
-                # If path is empty but file should exist, reconstruct expected path
-                if not export_path:
+            img_for_ratio = None
+            
+            try:
+                for deliver in export_settings:
+                    export_path = exported.get(deliver, "")
                     d_cfg = export_settings[deliver]
-                    ext = ".jpg" if d_cfg.get("format") == "JPEG" else ".png"
-                    created_tag = meta.get("created", "").replace(" ", "_").replace(":", "-")
-                    orig_stem = os.path.splitext(photo)[0]
-                    folder_tag = _sanitize_filename(folder.replace(" ", "_"))
-                    export_base_name = f"YAPA{created_tag}_{folder_tag}_{_sanitize_filename(orig_stem)}"
-                    export_path = os.path.normpath(os.path.join(export_folder, deliver, export_base_name + ext))
-                
-                # Now check if the file exists
-                if not os.path.isfile(export_path):
-                    logger.warning(
-                    f"[INTEGRITY] Brak pliku eksportu '{deliver}' — "
-                    f"reprocessing: {folder}/{photo}"
-                    )
-                    source_dict[folder][photo]["state"] = SourceState.NEW
-                    # Nie usuwamy całego 'exported', aby app mógł pominąć istniejące pliki
-                    changes.setdefault(folder, {})[photo] = SourceState.NEW
-                    break  # wystarczy jeden brakujący, żeby wymusić reprocessing
+                    
+                    # Sprawdź czy ten wariant powinien w ogóle istnieć (aspect ratio)
+                    ratios = d_cfg.get("ratio")
+                    if ratios:
+                        # Otwórz obraz aby sprawdzić ratio
+                        if img_for_ratio is None:
+                            img_for_ratio = Image.open(src_path)
+                        
+                        w, h = img_for_ratio.size
+                        ratio = round(w / h, 2)
+                        
+                        # Jeśli aspect ratio nie pasuje — skip (export nie powinien istnieć)
+                        if not any(abs(ratio - r) < 0.01 for r in ratios):
+                            logger.debug(
+                                f"[INTEGRITY] Aspect ratio {ratio} nie spełnia wymagań dla '{deliver}' — "
+                                f"skip: {folder}/{photo}"
+                            )
+                            continue
+                    
+                    # Export powinien istnieć — sprawdź ścieżkę
+                    if not export_path:
+                        # Reconstruct expected path
+                        ext = ".jpg" if d_cfg.get("format") == "JPEG" else ".png"
+                        created_tag = meta.get("created", "").replace(" ", "_").replace(":", "-")
+                        orig_stem = os.path.splitext(photo)[0]
+                        folder_tag = _sanitize_filename(folder.replace(" ", "_"))
+                        export_base_name = f"YAPA{created_tag}_{folder_tag}_{_sanitize_filename(orig_stem)}"
+                        export_path = os.path.normpath(os.path.join(export_folder, deliver, export_base_name + ext))
+                    
+                    # Sprawdź czy plik istnieje
+                    if not os.path.isfile(export_path):
+                        logger.warning(
+                            f"[INTEGRITY] Brak pliku eksportu '{deliver}' — "
+                            f"export_fail: {folder}/{photo}"
+                        )
+                        source_dict[folder][photo]["state"] = SourceState.EXPORT_FAIL
+                        changes.setdefault(folder, {})[photo] = SourceState.EXPORT_FAIL
+                        break  # wystarczy jeden brakujący
+                    
+                    # Sprawdź czy plik nie jest pusty
+                    try:
+                        file_size = os.path.getsize(export_path)
+                        if file_size == 0:
+                            logger.warning(
+                                f"[INTEGRITY] Pusty plik eksportu '{deliver}' — "
+                                f"export_fail: {folder}/{photo}"
+                            )
+                            source_dict[folder][photo]["state"] = SourceState.EXPORT_FAIL
+                            changes.setdefault(folder, {})[photo] = SourceState.EXPORT_FAIL
+                            break
+                    except OSError:
+                        logger.warning(
+                            f"[INTEGRITY] Błąd dostępu do eksportu '{deliver}' — "
+                            f"export_fail: {folder}/{photo}"
+                        )
+                        source_dict[folder][photo]["state"] = SourceState.EXPORT_FAIL
+                        changes.setdefault(folder, {})[photo] = SourceState.EXPORT_FAIL
+                        break
+                        
+            except Exception as exc:
+                logger.error(f"[INTEGRITY] Błąd sprawdzania eksportów {folder}/{photo}: {exc}")
+            finally:
+                if img_for_ratio:
+                    img_for_ratio.close()
 
     return changes
 
