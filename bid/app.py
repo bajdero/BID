@@ -532,7 +532,7 @@ class MainApp(tk.Tk):
         # Cleanup empty files every 10 scans
         self.scan_count += 1
         if self.scan_count % 10 == 0:
-            logger.info(f"[CLEANUP] Czyszczenie pustych plików eksportu (skan #{self.scan_count})")
+            logger.debug(f"[CLEANUP] Czyszczenie pustych plików eksportu (skan #{self.scan_count})")
             self._cleanup_empty_exports()
         try:
             with self.dict_lock:

@@ -636,7 +636,8 @@ def check_integrity(
                 continue
 
             # ---- Sprawdzenie plików eksportowych (tylko OK) ----
-            if state != SourceState.OK:
+            # TODO: Trzeba dodać nowy state jeżeli fail jest z errorem błąd zapisu e <export> file is not seekable to wtedy state powinien być export_fail
+            if state not in [SourceState.OK, SourceState.ERROR]:
                 continue
 
             exported: dict = meta.get("exported", {})
