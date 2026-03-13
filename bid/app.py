@@ -425,23 +425,26 @@ class MainApp(tk.Tk):
             self.status_label.config(text="Zakończono przetwarzanie")
 
     def _cleanup_empty_exports(self) -> None:
-        """Removes empty (0B) export files and cleans up tmp directory.
+        """Removes empty (0B) export files and marks photos for reprocessing.
         
         Called automatically every 10 scans to clean up failed exports
         that left behind empty placeholder files.
-        Also removes leftover temp files from export/tmp.
+        Photos with deleted exports are marked for reprocessing.
         """
         try:
             export_dir = Path(self.export_folder)
             if not export_dir.exists():
                 return
             
+            deleted_files = []  # Track deleted files for reprocessing
             deleted_count = 0
             
             # Clean up profile directories for 0B files
             for profile_dir in export_dir.iterdir():
                 if not profile_dir.is_dir() or profile_dir.name == "tmp":
                     continue
+                
+                profile_name = profile_dir.name
                 
                 # Check all files in profile directory
                 for export_file in profile_dir.iterdir():
@@ -451,6 +454,7 @@ class MainApp(tk.Tk):
                             if export_file.stat().st_size == 0:
                                 logger.warning(f"[CLEANUP] Usuwam pusty plik eksportu (0B): {export_file}")
                                 export_file.unlink()
+                                deleted_files.append((profile_name, str(export_file)))
                                 deleted_count += 1
                         except OSError as e:
                             logger.error(f"[CLEANUP] Błąd sprawdzenia pliku {export_file}: {e}")
@@ -471,6 +475,29 @@ class MainApp(tk.Tk):
                 
                 if tmp_count > 0:
                     logger.info(f"[CLEANUP] Usunięto {tmp_count} pików tymczasowych z export/tmp")
+            
+            # Reprocess photos with deleted exports
+            if deleted_files:
+                with self.dict_lock:
+                    reprocess_count = 0
+                    for profile_name, deleted_path in deleted_files:
+                        # Search through source_dict for photos with this export path
+                        for folder, photos in self.source_dict.items():
+                            for photo_name, meta in photos.items():
+                                exported = meta.get("exported", {})
+                                # Check if this photo had an export in the deleted profile
+                                if profile_name in exported and exported[profile_name] == deleted_path:
+                                    # Mark for reprocessing
+                                    logger.info(f"[CLEANUP] Zaznaczam do reprocesowania: {folder}/{photo_name} (profil: {profile_name})")
+                                    # Remove this profile from exported so it gets reprocessed
+                                    del exported[profile_name]
+                                    # If no more exports, set state to NEW for full reprocessing
+                                    if not exported and meta["state"] != SourceState.NEW:
+                                        meta["state"] = SourceState.NEW
+                                        reprocess_count += 1
+                    
+                    if reprocess_count > 0:
+                        logger.info(f"[CLEANUP] Zaznaczono {reprocess_count} zdjęć do reprocesowania")
             
             if deleted_count > 0:
                 logger.info(f"[CLEANUP] Razem usunięto {deleted_count} zbędnych plików")
