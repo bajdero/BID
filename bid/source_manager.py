@@ -476,6 +476,10 @@ def create_source_dict(
         for file in files:
             if file == "logo.png":
                 continue
+            # Skip macOS/iOS metadata files (e.g., ._ prefixed files from iPad export)
+            if file.startswith("._"):
+                logger.debug(f"Ignorując plik metadanych: {folder_name}/{file}")
+                continue
             output[folder_name][file] = create_source_item(
                 root, folder_name, file, export_folder, export_settings
             )
@@ -520,6 +524,10 @@ def update_source_dict(
         _check_logo_exists(root, folder_name)
         for file in files:
             if file == "logo.png":
+                continue
+            # Skip macOS/iOS metadata files (e.g., ._ prefixed files from iPad export)
+            if file.startswith("._"):
+                logger.debug(f"Ignorując plik metadanych: {folder_name}/{file}")
                 continue
             if file not in source_dict[folder_name]:
                 logger.info(f"Nowy plik: '{folder_name}/{file}'")
