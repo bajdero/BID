@@ -672,9 +672,9 @@ def test_aspect_ratio_computable_for_test_sources(img_path):
     assert ratio > 0, f"{img_path.name}: nieprawidłowe aspect ratio {ratio}"
 
 
-def test_image_dimensions_fallback_to_pil(tmp_path):
-    """TEST-DIM-003: Jeśli plik JPEG nie ma tagów wymiarów w EXIF,
-    get_all_exif używa PIL img.width/img.height jako fallback.
+def test_image_dimensions_always_from_pil(tmp_path):
+    """TEST-DIM-003: get_all_exif zawsze zwraca wymiary z PIL (img.width/img.height),
+    niezależnie od tego czy EXIF zawiera tagi wymiarów czy nie.
     """
     img_path = tmp_path / "no_dims.jpg"
     # Tworzenie obrazu BEZ tagów ImageWidth/ImageLength w EXIF
@@ -694,22 +694,29 @@ def test_image_dimensions_fallback_to_pil(tmp_path):
     )
 
 
-def test_image_dimensions_not_overridden_when_exif_present(tmp_path):
-    """TEST-DIM-004: Jeśli EXIF zawiera już ImageWidth/ImageLength,
-    get_all_exif nie nadpisuje tych wartości wartościami PIL.
+def test_image_dimensions_pil_overrides_exif(tmp_path):
+    """TEST-DIM-004: get_all_exif zawsze używa PIL img.width/img.height,
+    nawet gdy EXIF zawiera inne (nieprawidłowe) wartości wymiarów.
+    PIL jest zawsze autorytatywnym źródłem rozdzielczości.
     """
-    img_path = tmp_path / "with_dims.jpg"
+    img_path = tmp_path / "wrong_exif_dims.jpg"
+    # Obraz rzeczywisty: 1000x800 — w EXIF ustawiamy błędne wartości
     img_new = Image.new("RGB", (1000, 800))
     exif = img_new.getexif()
-    exif[256] = 1000  # ImageWidth
-    exif[257] = 800   # ImageLength
+    exif[256] = 9999  # ImageWidth — celowo błędna wartość
+    exif[257] = 9999  # ImageLength — celowo błędna wartość
     img_new.save(img_path, "JPEG", exif=exif.tobytes())
 
     with Image.open(img_path) as opened:
         result = get_all_exif(opened)
 
-    assert result.get("ImageWidth") == "1000"
-    assert result.get("ImageLength") == "800"
+    # PIL powinien zawsze wygrać — zwraca rzeczywiste wymiary 1000x800
+    assert result.get("ImageWidth") == "1000", (
+        f"Oczekiwano ImageWidth=1000 (z PIL), dostałem {result.get('ImageWidth')!r}"
+    )
+    assert result.get("ImageLength") == "800", (
+        f"Oczekiwano ImageLength=800 (z PIL), dostałem {result.get('ImageLength')!r}"
+    )
 
 
 def test_image_dimensions_match_pil_for_test_sources(img_path=None):
