@@ -188,7 +188,7 @@ def save_image_safe(
 ) -> None:
     """Saves image to file using temporary file to prevent 0B files on error.
     
-    Writes to a temporary file in the same directory first.
+    Writes to a temporary file in export/tmp/ directory first.
     Only moves to final location if write succeeds.
     This prevents creating 0B placeholder files when export fails.
     
@@ -205,9 +205,13 @@ def save_image_safe(
     export_dir = os.path.dirname(export_path)
     os.makedirs(export_dir, exist_ok=True)
     
-    # Create temporary file in same directory to ensure same filesystem
+    # Create temporary file in export/tmp/ directory to keep profile dirs clean
+    export_root = os.path.dirname(export_dir)  # Get parent directory (export folder)
+    tmp_dir = os.path.join(export_root, "tmp")
+    os.makedirs(tmp_dir, exist_ok=True)
+    
     temp_fd, temp_path = tempfile.mkstemp(
-        dir=export_dir,
+        dir=tmp_dir,
         prefix='.bid_tmp_',
         suffix=os.path.splitext(export_path)[1]
     )

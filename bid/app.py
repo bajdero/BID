@@ -430,10 +430,11 @@ class MainApp(tk.Tk):
             self.status_label.config(text="Zakończono przetwarzanie")
 
     def _cleanup_empty_exports(self) -> None:
-        """Removes empty (0B) export files from export folders.
+        """Removes empty (0B) export files and cleans up tmp directory.
         
         Called automatically every 10 scans to clean up failed exports
         that left behind empty placeholder files.
+        Also removes leftover temp files from export/tmp.
         """
         try:
             export_dir = Path(self.export_folder)
@@ -441,8 +442,10 @@ class MainApp(tk.Tk):
                 return
             
             deleted_count = 0
+            
+            # Clean up profile directories for 0B files
             for profile_dir in export_dir.iterdir():
-                if not profile_dir.is_dir():
+                if not profile_dir.is_dir() or profile_dir.name == "tmp":
                     continue
                 
                 # Check all files in profile directory
@@ -457,11 +460,28 @@ class MainApp(tk.Tk):
                         except OSError as e:
                             logger.debug(f"[CLEANUP] Błąd sprawdzenia pliku {export_file}: {e}")
             
+            # Clean up tmp directory
+            tmp_dir = export_dir / "tmp"
+            if tmp_dir.exists():
+                tmp_count = 0
+                for tmp_file in tmp_dir.iterdir():
+                    if tmp_file.is_file():
+                        try:
+                            logger.debug(f"[CLEANUP] Usuwam pozostały plik tymczasowy: {tmp_file}")
+                            tmp_file.unlink()
+                            tmp_count += 1
+                            deleted_count += 1
+                        except OSError as e:
+                            logger.debug(f"[CLEANUP] Błąd czyszczenia tmp pliku {tmp_file}: {e}")
+                
+                if tmp_count > 0:
+                    logger.info(f"[CLEANUP] Usunięto {tmp_count} pików tymczasowych z export/tmp")
+            
             if deleted_count > 0:
-                logger.info(f"[CLEANUP] Usunięto {deleted_count} pustych plików eksportu")
+                logger.info(f"[CLEANUP] Razem usunięto {deleted_count} zbędnych plików")
         
         except Exception as exc:
-            logger.error(f"[CLEANUP] Błąd podczas czyszczenia pustych plików: {exc}")
+            logger.error(f"[CLEANUP] Błąd podczas czyszczenia plików: {exc}")
 
     # Te funkcje są teraz zastąpione przez logic w image_processing.py i pool executor
     # def process_photo(self, folder: str, photo: str) -> None: ...
