@@ -30,7 +30,7 @@ DEFAULT_EXPORT_OPTIONS: dict = {
         "logo_required": False,
         "logo": {
             "landscape": {"size": 260, "opacity": 60, "x_offset": 10, "y_offset": 10, "placement": "bottom-right"},
-            "portrait":  {"size": 332, "opacity": 60, "x_offset": 10, "y_offset": 10, "placement": "bottom-right"},
+            "portrait":  {"size": 220, "opacity": 25, "x_offset": 10, "y_offset": 10, "placement": "bottom-right"},
         },
     },
 }

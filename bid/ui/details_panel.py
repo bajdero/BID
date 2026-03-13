@@ -85,8 +85,12 @@ class DetailsPanel(ttk.Frame):
             artist_display = str(artist_raw).strip()
 
         # Wymiary w pikselach i proporcje
-        img_w = exif_dict.get("ImageWidth", "") or exif_dict.get("ExifImageWidth", "")
-        img_h = exif_dict.get("ImageLength", "") or exif_dict.get("ExifImageHeight", "")
+        # Wymiary pochodzą z PIL (zawsze autorytatywne) przechowywane w metadanych indeksu jako ImageWidth/ImageLength
+        # (są ustawiane w get_all_exif() bezpośrednio z img.width/img.height)
+        # img_w = exif_dict.get("ImageWidth", "") or exif_dict.get("ExifImageWidth", "")
+        # img_h = exif_dict.get("ImageLength", "") or exif_dict.get("ExifImageHeight", "")
+        img_w = exif_dict.get("ImageWidth", "")
+        img_h = exif_dict.get("ImageLength", "")
         try:
             w_int = int(str(img_w).split()[0]) if img_w else 0
             h_int = int(str(img_h).split()[0]) if img_h else 0
