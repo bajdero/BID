@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import html
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
 from enum import Enum
 from typing import Any
@@ -70,7 +70,6 @@ class Event:
         status:    Event status enum.
         type_color: Color code hint from the JSON (e.g. ``"#abdfff"``).
         time_display: Human-readable time string from JSON (e.g. ``"12:06 - 12:13"``).
-        raw:       Original JSON dict (for debugging / future fields).
     """
     id: str
     name: str
@@ -80,7 +79,6 @@ class Event:
     status: EventStatus
     type_color: str = ""
     time_display: str = ""
-    raw: dict = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
     def from_json(cls, data: dict[str, Any]) -> Event:
@@ -117,7 +115,6 @@ class Event:
             status=EventStatus.from_str(str(data["status"])),
             type_color=str(data.get("type", "")),
             time_display=str(data.get("time", "")),
-            raw=dict(data),
         )
 
     def contains_timestamp(self, ts: datetime) -> bool:
@@ -151,13 +148,11 @@ class Schedule:
         events:       Chronologically ordered list of *all* events.
         last_update:  Server-reported last update time (raw string).
         source_url:   URL or file path this schedule was loaded from.
-        raw:          Original JSON dict.
     """
     title: str
     events: tuple[Event, ...]
     last_update: str = ""
     source_url: str = ""
-    raw: dict = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
     def from_json(cls, data: dict[str, Any], source_url: str = "") -> Schedule:
@@ -188,7 +183,6 @@ class Schedule:
             events=tuple(events),
             last_update=str(data.get("last_update", "")),
             source_url=source_url,
-            raw=dict(data),
         )
 
     @property

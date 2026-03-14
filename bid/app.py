@@ -206,9 +206,10 @@ class MainApp(tk.Tk):
         # Stan przetwarzania
         # ----------------------------------------------------------------
         self.active_scanning: dict[Future, tuple[str, str]] = {}
-        self.max_workers: int = os.cpu_count() or 4
+        self.max_workers: int = min(os.cpu_count(), 3)
         self.executor = ThreadPoolExecutor(max_workers=self.max_workers)
         self.scan_count: int = 0  # Counter for cleanup every 10 scans
+        self._dict_dirty: bool = False  # True when source_dict needs saving
 
         self.update_source_thread: threading.Thread | None = None
         self.file_monitor_thread: threading.Thread | None = None
@@ -224,6 +225,7 @@ class MainApp(tk.Tk):
         self._running = True
 
         init_toasts(self)  # inicjalizuj system powiadomień
+        self.after(5000, self._periodic_save)  # start debounced save loop
         self.monitor_incomplete()  # Start background file monitor
         self.update_source()
         self.scan_photos()
@@ -420,7 +422,7 @@ class MainApp(tk.Tk):
                     )
                     if move_files else (0, 0)
                 )
-                save_source_dict(self.source_dict, self.project_path)
+                self._mark_dirty()
             self.source_tree.update_tree(self.source_dict)
             self._update_events_toolbar()
             if moved:
@@ -500,7 +502,7 @@ class MainApp(tk.Tk):
                         moved, _ = move_exported_files_on_reassignment(
                             self.source_dict, self.export_folder
                         )
-                        save_source_dict(self.source_dict, self.project_path)
+                        self._mark_dirty()
                     self.source_tree.update_tree(self.source_dict)
                     self._update_events_toolbar()
                     if moved:
@@ -539,7 +541,7 @@ class MainApp(tk.Tk):
             # Tworzymy snapshot bazy (listę krotek), aby uniknąć RuntimeError
             # podczas iteracji, gdyby coś (np. worker) zmieniło dict w międzyczasie.
             for folder, photos in list(self.source_dict.items()):
-                for photo, meta in list(photos.items()):
+                for photo, meta in photos.items():
                     if meta["state"] in (SourceState.NEW, SourceState.EXPORT_FAIL):
                         # Sprawdź czy już nie jest w kolejce do przetwarzania
                         if any((f, p) == (folder, photo) for f, p in self.active_scanning.values()):
@@ -594,7 +596,7 @@ class MainApp(tk.Tk):
                     self._mark_error_locked(folder, photo, f"Błąd krytyczny procesu: {exc}")
         
         if done_futures:
-            save_source_dict(self.source_dict, self.project_path)
+            self._mark_dirty()
             self.scan_photos()
         
         if self.active_scanning:
@@ -748,7 +750,7 @@ class MainApp(tk.Tk):
                 )
 
                 # 3. Zapis
-                save_source_dict(self.source_dict, self.project_path)
+                self._mark_dirty()
 
             # Wyniki trafiają do kolejki — main thread odbiera przez _poll_update_source.
             # NIE wolno wołać self.after() z wątku roboczego!
@@ -811,7 +813,7 @@ class MainApp(tk.Tk):
             )
             self.file_monitor_thread.start()
         
-        self.after(100, self._poll_monitor_incomplete)
+        self.after(500, self._poll_monitor_incomplete)
 
     def _monitor_incomplete_worker(self) -> None:
         """Wątek roboczy monitorowania niedokończonych plików.
@@ -856,7 +858,7 @@ class MainApp(tk.Tk):
         except queue.Empty:
             pass
         finally:
-            self.after(100, self._poll_monitor_incomplete)
+            self.after(500, self._poll_monitor_incomplete)
 
     def _sync_ui_after_monitoring(self, monitor_updates: dict) -> None:
         """UI sync dla rezultatów monitorowania — wywoływane w main thread.
@@ -881,7 +883,7 @@ class MainApp(tk.Tk):
         if ready_count > 0:
             logger.info(f"Monitor: {ready_count} files ready for processing")
             self.source_tree.update_tree(self.source_dict)
-            save_source_dict(self.source_dict, self.project_path)
+            self._mark_dirty()
             self.scan_photos()
 
     def _mark_error_locked(self, folder: str, photo: str, msg: str) -> None:
@@ -890,11 +892,27 @@ class MainApp(tk.Tk):
         self.source_dict[folder][photo]["state"] = SourceState.ERROR
         self.source_dict[folder][photo]["error_msg"] = msg
         self.source_tree.change_tag(folder, photo, SourceState.ERROR)
-        save_source_dict(self.source_dict, self.project_path)
+        self._mark_dirty()
 
     # ================================================================
     # Pomocnicze
     # ================================================================
+
+    def _mark_dirty(self) -> None:
+        """Mark source_dict as modified; a periodic save will flush it to disk."""
+        self._dict_dirty = True
+
+    def _periodic_save(self) -> None:
+        """Save source_dict to disk every 5 seconds if modified."""
+        if self._dict_dirty and hasattr(self, "source_dict"):
+            try:
+                save_source_dict(self.source_dict, self.project_path)
+                self._dict_dirty = False
+                logger.debug("[SAVE] Periodic save completed")
+            except Exception as exc:
+                logger.error(f"[SAVE] Periodic save failed: {exc}")
+        if not self._stop_event.is_set():
+            self.after(5000, self._periodic_save)
 
     def _mark_error(self, folder: str, photo: str, msg: str) -> None:
         """Oznacza zdjęcie jako błędne i loguje komunikat.
@@ -908,7 +926,7 @@ class MainApp(tk.Tk):
         self.source_dict[folder][photo]["state"] = SourceState.ERROR
         self.source_dict[folder][photo]["error_msg"] = msg
         self.source_tree.change_tag(folder, photo, SourceState.ERROR)
-        save_source_dict(self.source_dict, self.project_path)
+        self._mark_dirty()
 
     def _on_close(self) -> None:
         """Graceful shutdown — sygnalizuje wątkom, że czas kończyć."""
@@ -918,6 +936,11 @@ class MainApp(tk.Tk):
             except Exception:
                 pass
         self._stop_event.set()
+        if self._dict_dirty and hasattr(self, "source_dict"):
+            try:
+                save_source_dict(self.source_dict, self.project_path)
+            except Exception:
+                pass
         self.destroy()
 
     def mainloop(self, n: int = 0) -> None:

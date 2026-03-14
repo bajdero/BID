@@ -18,7 +18,7 @@ from PIL import Image, ImageCms, ExifTags
 logger = logging.getLogger("BID")
 
 
-@lru_cache(maxsize=32)
+@lru_cache(maxsize=8)
 def get_logo(logo_path: str) -> Image.Image:
     """Wczytuje i cache'uje logo."""
     logger.debug(f"Wczytuję logo (cache miss): {logo_path}")
@@ -222,6 +222,7 @@ def process_photo_task(
         "error_msg": None
     }
 
+    raw_photo = None
     try:
         # ---- Wczytywanie ----
         try:
@@ -319,6 +320,9 @@ def process_photo_task(
                 logger.warning(f"[PROCESS] BRAK LOGO: {os.path.dirname(photo_path)} — eksport bez watermarku")
                 if logo_required:
                     logger.warning(f"[PROCESS] Logo wymagane w profilu '{deliver}' — pomijam folder {os.path.dirname(photo_path)}")
+                    if img_conv is not resized:
+                        img_conv.close()
+                    resized.close()
                     continue
                 final_img = img_conv
             else:
@@ -375,6 +379,12 @@ def process_photo_task(
                 final_img.save(export_path, **save_args, exif=exif.tobytes() if fmt == "JPEG" else None)
                 results["exported"][deliver] = export_path
                 logger.info(f"[PROCESS] Eksport '{deliver}' zapisany: {export_path}")
+                # Free intermediate images before starting next profile iteration
+                if final_img is not img_conv:
+                    final_img.close()
+                if img_conv is not resized:
+                    img_conv.close()
+                resized.close()
 
             except Exception as exc:
                 results["success"] = False
@@ -391,6 +401,9 @@ def process_photo_task(
         results["success"] = False
         results["error_msg"] = f"Nieoczekiwany błąd: {exc}"
         return results
+    finally:
+        if raw_photo is not None:
+            raw_photo.close()
 
 
 # ---------------------------------------------------------------------------

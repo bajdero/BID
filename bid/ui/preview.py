@@ -79,7 +79,7 @@ class PrevWindow(tk.Frame):
             try:
                 self._img_queue.put_nowait(resized)
             except queue.Full:
-                pass  # main thread hasn’t consumed the previous frame yet; discard
+                resized.close()  # discard cleanly to avoid memory leak
         except Exception as exc:
             logger.error(f"Błąd wczytywania podglądu '{img_path}': {exc}")
 
@@ -96,9 +96,9 @@ class PrevWindow(tk.Frame):
         except queue.Empty:
             pass
         try:
-            self.after(50, self._poll_img_queue)
+            self.after(100, self._poll_img_queue)
         except Exception:
-            pass  # widget został zniszczony — kończymy pętlę
+            pass  # widget destroyed — stop loop
 
     def _apply_image(self, pil_img: Image.Image) -> None:
         """Tworzy PhotoImage i aktualizuje canvas — MUSI być na głównym wątku."""
