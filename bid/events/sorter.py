@@ -58,7 +58,7 @@ def generate_folder_map(
         folder_map[event.id] = folder_name
         logger.debug(f"[EVENT] Folder map: {event.id} → {folder_name}")
 
-    logger.info(
+    logger.debug(
         f"[EVENT] Generated folder map: {len(folder_map) - 1} event folders + undefined"
     )
     return folder_map

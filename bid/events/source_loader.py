@@ -130,7 +130,7 @@ def load_event_source(
         source.last_loaded = datetime.now(timezone.utc)
         source.error = None
 
-        logger.info(
+        logger.debug(
             f"[EVENT] Parsed schedule '{schedule.title}' from {source.location}: "
             f"{len(schedule.events)} total events, "
             f"{len(schedule.active_events)} active (status=was)"

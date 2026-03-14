@@ -453,16 +453,19 @@ class MainApp(tk.Tk):
         if self._stop_event.is_set():
             return
 
+        old_fp = self.event_manager.schedules_fingerprint()
+
         def _worker() -> None:
             try:
                 schedules = self.event_manager.load_all()
+                new_fp = self.event_manager.schedules_fingerprint()
                 self._event_queue.put_nowait(
-                    {"schedules": schedules, "error": None}
+                    {"schedules": schedules, "changed": new_fp != old_fp, "error": None}
                 )
             except Exception as exc:  # noqa: BLE001
                 try:
                     self._event_queue.put_nowait(
-                        {"schedules": [], "error": str(exc)}
+                        {"schedules": [], "changed": False, "error": str(exc)}
                     )
                 except queue.Full:
                     pass
@@ -484,26 +487,29 @@ class MainApp(tk.Tk):
         if result.get("error"):
             logger.error(f"[EVENT] Auto-refresh error: {result['error']}")
         elif result.get("schedules"):
-            from bid.events.sorter import move_exported_files_on_reassignment
-            try:
-                with self.dict_lock:
-                    self.event_manager.annotate(self.source_dict)
-                    self.event_manager.ensure_export_folders(
-                        self.export_folder, self.export_settings
-                    )
-                    moved, _ = move_exported_files_on_reassignment(
-                        self.source_dict, self.export_folder
-                    )
-                    save_source_dict(self.source_dict, self.project_path)
-                self.source_tree.update_tree(self.source_dict)
-                self._update_events_toolbar()
-                if moved:
-                    show_toast(
-                        f"[Auto] Przeniesiono {moved} plik(ów)", level="info"
-                    )
-                logger.info("[EVENT] Auto-refresh complete.")
-            except Exception as exc:
-                logger.error(f"[EVENT] Auto-refresh apply failed: {exc}")
+            if not result.get("changed", True):
+                logger.debug("[EVENT] Auto-refresh: no changes in JSON — skipping export scan.")
+            else:
+                from bid.events.sorter import move_exported_files_on_reassignment
+                try:
+                    with self.dict_lock:
+                        self.event_manager.annotate(self.source_dict)
+                        self.event_manager.ensure_export_folders(
+                            self.export_folder, self.export_settings
+                        )
+                        moved, _ = move_exported_files_on_reassignment(
+                            self.source_dict, self.export_folder
+                        )
+                        save_source_dict(self.source_dict, self.project_path)
+                    self.source_tree.update_tree(self.source_dict)
+                    self._update_events_toolbar()
+                    if moved:
+                        show_toast(
+                            f"[Auto] Przeniesiono {moved} plik(ów)", level="info"
+                        )
+                    logger.info("[EVENT] Auto-refresh complete.")
+                except Exception as exc:
+                    logger.error(f"[EVENT] Auto-refresh apply failed: {exc}")
 
         self._schedule_events_refresh()
 

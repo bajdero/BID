@@ -193,6 +193,24 @@ class EventManager:
         )
         return loaded
 
+    def schedules_fingerprint(self) -> frozenset[tuple[str, str, str]]:
+        """Return a fingerprint of the current active events for change detection.
+
+        Returns a frozenset of ``(event_id, start_iso, end_iso)`` tuples built
+        from :attr:`active_events` across all loaded schedules.  If the
+        fingerprint differs between two calls the schedule data has changed and
+        an export scan should be triggered.
+        """
+        result: set[tuple[str, str, str]] = set()
+        for schedule in self.schedules:
+            for event in schedule.active_events:
+                result.add((
+                    event.id,
+                    event.start.isoformat(),
+                    event.end.isoformat(),
+                ))
+        return frozenset(result)
+
     def load_source(self, location: str, timeout: float = 15.0) -> Schedule | None:
         """Load a single source by location.
 
