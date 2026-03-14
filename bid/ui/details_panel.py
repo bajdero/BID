@@ -48,6 +48,14 @@ class DetailsPanel(ttk.Frame):
         exif_container.grid_rowconfigure(0, weight=1)
 
         # --- Sekcja Eksporty ---
+        event_row = ttk.Frame(self)
+        event_row.pack(fill=tk.X, pady=(0, 4))
+        ttk.Label(event_row, text="Zdarzenie:",
+                  font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT)
+        self._event_var = tk.StringVar(value="---")
+        ttk.Label(event_row, textvariable=self._event_var,
+                  font=("Segoe UI", 9)).pack(side=tk.LEFT, padx=(4, 0))
+
         ttk.Label(self, text="Statusy eksportu", font=("Segoe UI", 10, "bold")).pack(anchor=tk.W)
         self.export_tree = ttk.Treeview(self, columns=["status"], height=4, show="tree headings")
         self.export_tree.heading("#0", text="Profil")
@@ -132,6 +140,14 @@ class DetailsPanel(ttk.Frame):
             path = exported.get(deliver, "Brak")
             status = "✓ Istnieje" if path != "Brak" else "---"
             self.export_tree.insert("", "end", text=deliver, values=(status,))
+
+        # --- Zdarzenie ---
+        ef = meta.get("event_folder", "")
+        en = meta.get("event_name", "")
+        if ef:
+            self._event_var.set(f"{ef}" + (f"  —  {en}" if en else ""))
+        else:
+            self._event_var.set("---")
 
         # --- Performance ---
         duration = meta.get("duration_sec")

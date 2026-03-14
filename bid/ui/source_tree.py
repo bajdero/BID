@@ -55,17 +55,19 @@ class SourceTree(tk.Frame):
 
         self.source_tree = ttk.Treeview(
             self,
-            columns=["rozmiar", "date", "path"],
-            displaycolumns=["rozmiar", "date"],
+            columns=["rozmiar", "date", "event", "path"],
+            displaycolumns=["rozmiar", "date", "event"],
             height=23,
             selectmode="browse",
         )
         self.source_tree.column("#0",      width=200)
         self.source_tree.column("rozmiar", width=80)
         self.source_tree.column("date",    width=120)
-        self.source_tree.heading("#0",      text="Nazwa",   anchor=tk.W)
-        self.source_tree.heading("rozmiar", text="Rozmiar", anchor=tk.W)
-        self.source_tree.heading("date",    text="Data",    anchor=tk.W)
+        self.source_tree.column("event",   width=145)
+        self.source_tree.heading("#0",      text="Nazwa",     anchor=tk.W)
+        self.source_tree.heading("rozmiar", text="Rozmiar",   anchor=tk.W)
+        self.source_tree.heading("date",    text="Data",      anchor=tk.W)
+        self.source_tree.heading("event",   text="Zdarzenie", anchor=tk.W)
 
         # TODO: UX/UI: Zamiast kolorowania całego tła wiersza (co może być jaskrawe/nieczytelne), użyć ikon statusu (np. ✅, ❌, ⏳) w nowej kolumnie "Status". Kolory można zarezerwować tylko dla ikony lub delikatnego paska z lewej strony.
         self.source_tree.tag_configure(SourceState.NEW,        background="light gray")
@@ -139,7 +141,8 @@ class SourceTree(tk.Frame):
                         "end",
                         id=f"{folder}_{file}",
                         text=f"{icon}{file}",
-                        values=[meta["size"], meta["created"], meta["path"]],
+                        values=[meta["size"], meta["created"],
+                                meta.get("event_folder", ""), meta["path"]],
                         tags=meta["state"],
                     )
                 except _tkinter.TclError:
@@ -150,7 +153,8 @@ class SourceTree(tk.Frame):
                             f"{folder}_{file}",
                             tags=meta["state"],
                             text=f"{icon}{file}",
-                            values=[meta["size"], meta["created"], meta["path"]]
+                            values=[meta["size"], meta["created"],
+                                    meta.get("event_folder", ""), meta["path"]]
                         )
                     except _tkinter.TclError:
                         pass

@@ -133,10 +133,36 @@ class MainApp(tk.Tk):
         save_source_dict(self.source_dict, project_path)
 
         # ----------------------------------------------------------------
+        # Event-based sorting (optional — active when event_sources.json exists)
+        # ----------------------------------------------------------------
+        from bid.events.manager import EventManager
+        self.event_manager = EventManager(project_path)
+        self._event_queue: queue.Queue = queue.Queue(maxsize=1)
+        self._event_refresh_id: str | None = None
+        if self.event_manager.sources:
+            try:
+                self.event_manager.load_all()
+                if self.event_manager.has_events:
+                    self.event_manager.annotate(self.source_dict)
+                    self.event_manager.ensure_export_folders(
+                        self.export_folder, self.export_settings
+                    )
+                    save_source_dict(self.source_dict, project_path)
+                    logger.info(
+                        f"[EVENT] Event sorting active: "
+                        f"{len(self.event_manager.folder_map) - 1} event folders"
+                    )
+            except Exception as exc:
+                logger.error(f"[EVENT] Failed to initialize events: {exc}")
+
+        # ----------------------------------------------------------------
         # UI — Układ główny
         # ----------------------------------------------------------------
         # Pasek menu
         self._build_main_menu()
+
+        # Pasek narzędzi
+        self._build_toolbar()
 
         # Główny kontener
         # TODO: UX/UI: Użyć nowocześniejszego layoutu (np. grid zamiast pack) dla lepszego skalowania i dodania marginesów.
@@ -201,6 +227,9 @@ class MainApp(tk.Tk):
         self.monitor_incomplete()  # Start background file monitor
         self.update_source()
         self.scan_photos()
+        self._update_events_toolbar()
+        if self.event_manager.sources:
+            self._schedule_events_refresh()
 
     # ================================================================
     # Project selection helpers (Toplevel dialogs — no extra tk.Tk)
@@ -275,6 +304,8 @@ class MainApp(tk.Tk):
         action_menu.add_command(label="Rozpocznij eksport", command=self.scan_photos)
         action_menu.add_separator()
         action_menu.add_command(label="Nowy profil eksportu...", command=self.on_new_export_profile)
+        action_menu.add_separator()
+        action_menu.add_command(label="Zdarzenia (JSON)...", command=self._show_events_window)
         menubar.add_cascade(label="Akcje", menu=action_menu)
 
         self.config(menu=menubar)
@@ -321,6 +352,160 @@ class MainApp(tk.Tk):
                 self.load_project(path)
             else:
                 messagebox.showerror("Błąd", "Wybrany folder nie jest poprawnym projektem BID.")
+
+    # ================================================================
+    # Event source management
+    # ================================================================
+
+    def _build_toolbar(self) -> None:
+        """Toolbar with events button and status label."""
+        self._toolbar = ttk.Frame(self, relief=tk.FLAT, padding=(4, 2))
+        self._toolbar.pack(side=tk.TOP, fill=tk.X)
+        ttk.Button(
+            self._toolbar, text="\U0001f4c5 Zdarzenia",
+            command=self._show_events_window,
+        ).pack(side=tk.LEFT, padx=(0, 4))
+        self._events_status_var = tk.StringVar(value="")
+        ttk.Label(
+            self._toolbar,
+            textvariable=self._events_status_var,
+            font=("Segoe UI", 9),
+            foreground="#555",
+        ).pack(side=tk.LEFT)
+
+    def _show_events_window(self) -> None:
+        """Open (or raise) the events management window."""
+        from bid.ui.events_window import EventsWindow
+        EventsWindow.show(self)
+
+    def _update_events_toolbar(self) -> None:
+        """Refresh the toolbar label with current event count."""
+        if not hasattr(self, "_events_status_var"):
+            return
+        em = self.event_manager
+        if not em.has_events:
+            self._events_status_var.set(
+                "Brak zdarzeń" if em.sources else ""
+            )
+        else:
+            n = sum(1 for k in em.folder_map if k != "__undefined__")
+            self._events_status_var.set(f"{n} zdarzeń")
+
+    def _events_apply(
+        self,
+        move_files: bool = True,
+        trigger_scan: bool = True,
+    ) -> int:
+        """Load all event sources, annotate photos, optionally move files.
+
+        This is the single entry-point called by EventsWindow, the auto-
+        refresh timer, and the main init path.  Always runs on the main
+        thread (Tk-safe).
+
+        Returns the number of files moved.
+        """
+        from bid.events.sorter import move_exported_files_on_reassignment
+        try:
+            schedules = self.event_manager.load_all()
+            if not schedules:
+                return 0
+            with self.dict_lock:
+                self.event_manager.annotate(self.source_dict)
+                self.event_manager.ensure_export_folders(
+                    self.export_folder, self.export_settings
+                )
+                moved, _errors = (
+                    move_exported_files_on_reassignment(
+                        self.source_dict, self.export_folder
+                    )
+                    if move_files else (0, 0)
+                )
+                save_source_dict(self.source_dict, self.project_path)
+            self.source_tree.update_tree(self.source_dict)
+            self._update_events_toolbar()
+            if moved:
+                show_toast(
+                    f"Przeniesiono {moved} plik(ów) do folderów zdarzeń",
+                    level="info",
+                )
+            if trigger_scan:
+                self.scan_photos()
+            return moved
+        except Exception as exc:
+            logger.error(f"[EVENT] _events_apply failed: {exc}")
+            show_toast(f"Błąd zdarzeń: {exc}", level="error")
+            return 0
+
+    # -- Auto-refresh every 60 s -----------------------------------------
+
+    _EVENT_REFRESH_MS = 60_000
+
+    def _schedule_events_refresh(self) -> None:
+        """Schedule the next background event refresh in 60 seconds."""
+        if self._stop_event.is_set() or not self.event_manager.sources:
+            return
+        self._event_refresh_id = self.after(
+            self._EVENT_REFRESH_MS, self._start_bg_events_refresh
+        )
+
+    def _start_bg_events_refresh(self) -> None:
+        """Fire a daemon thread to reload URL sources, then poll the result."""
+        if self._stop_event.is_set():
+            return
+
+        def _worker() -> None:
+            try:
+                schedules = self.event_manager.load_all()
+                self._event_queue.put_nowait(
+                    {"schedules": schedules, "error": None}
+                )
+            except Exception as exc:  # noqa: BLE001
+                try:
+                    self._event_queue.put_nowait(
+                        {"schedules": [], "error": str(exc)}
+                    )
+                except queue.Full:
+                    pass
+
+        threading.Thread(target=_worker, daemon=True,
+                         name="event-refresh").start()
+        self.after(300, self._poll_event_queue)
+
+    def _poll_event_queue(self) -> None:
+        """Check for finished background refresh; apply result on main thread."""
+        if self._stop_event.is_set():
+            return
+        try:
+            result = self._event_queue.get_nowait()
+        except queue.Empty:
+            self.after(300, self._poll_event_queue)
+            return
+
+        if result.get("error"):
+            logger.error(f"[EVENT] Auto-refresh error: {result['error']}")
+        elif result.get("schedules"):
+            from bid.events.sorter import move_exported_files_on_reassignment
+            try:
+                with self.dict_lock:
+                    self.event_manager.annotate(self.source_dict)
+                    self.event_manager.ensure_export_folders(
+                        self.export_folder, self.export_settings
+                    )
+                    moved, _ = move_exported_files_on_reassignment(
+                        self.source_dict, self.export_folder
+                    )
+                    save_source_dict(self.source_dict, self.project_path)
+                self.source_tree.update_tree(self.source_dict)
+                self._update_events_toolbar()
+                if moved:
+                    show_toast(
+                        f"[Auto] Przeniesiono {moved} plik(ów)", level="info"
+                    )
+                logger.info("[EVENT] Auto-refresh complete.")
+            except Exception as exc:
+                logger.error(f"[EVENT] Auto-refresh apply failed: {exc}")
+
+        self._schedule_events_refresh()
 
     # ================================================================
     # Przetwarzanie zdjęć
@@ -384,6 +569,7 @@ class MainApp(tk.Tk):
             export_folder=self.export_folder,
             export_settings=self.export_settings,
             existing_exports=meta.get("exported", {}),
+            event_folder=meta.get("event_folder"),
         )
         self.active_scanning[future] = (folder, photo)
         # Use after() to check results periodically
@@ -720,6 +906,11 @@ class MainApp(tk.Tk):
 
     def _on_close(self) -> None:
         """Graceful shutdown — sygnalizuje wątkom, że czas kończyć."""
+        if self._event_refresh_id is not None:
+            try:
+                self.after_cancel(self._event_refresh_id)
+            except Exception:
+                pass
         self._stop_event.set()
         self.destroy()
 

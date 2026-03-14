@@ -5,3 +5,5 @@ Jeżeli export już poszedł, to nie może nadpisać tego liku
 ipad wywala dwa zdjęcia. nomalna nazwa i z ._ na początku. tez z ._ trzeba pomijać. 
 
 błąd zapisu e <export> file is not seekable
+
+to zabezpieczenie przed procesowaniem zanim się zgra to nadal gówno. 

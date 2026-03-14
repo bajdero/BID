@@ -187,8 +187,21 @@ def process_photo_task(
     export_folder: str,
     export_settings: dict,
     existing_exports: dict,
+    event_folder: str | None = None,
 ) -> dict:
     """Przetwarza jedno zdjęcie (wszystkie warianty) w osobnym procesie.
+
+    Args:
+        photo_path:       Full path to the source photo.
+        folder_name:      Session/author folder name.
+        photo_name:       Photo filename.
+        created_date:     EXIF creation date string.
+        export_folder:    Base export directory.
+        export_settings:  Export profile configuration dict.
+        existing_exports: Already exported paths {profile: path}.
+        event_folder:     Event subfolder name (e.g. '03_Grupa_ELORE').
+                          If provided, exports go into {profile}/{event_folder}/.
+                          If None, exports go directly into {profile}/.
 
     Returns:
         Słownik z wynikami: {success, exported, duration, error_msg}.
@@ -352,8 +365,13 @@ def process_photo_task(
                 else:
                     raise ValueError(f"Nieznany format eksportu: {fmt!r}")
 
-                export_path = os.path.join(export_folder, deliver, export_name + ext)
-                os.makedirs(os.path.join(export_folder, deliver), exist_ok=True)
+                # Build export path — optionally route through event subfolder
+                if event_folder:
+                    export_dir = os.path.join(export_folder, deliver, event_folder)
+                else:
+                    export_dir = os.path.join(export_folder, deliver)
+                export_path = os.path.join(export_dir, export_name + ext)
+                os.makedirs(export_dir, exist_ok=True)
                 final_img.save(export_path, **save_args, exif=exif.tobytes() if fmt == "JPEG" else None)
                 results["exported"][deliver] = export_path
                 logger.info(f"[PROCESS] Eksport '{deliver}' zapisany: {export_path}")
