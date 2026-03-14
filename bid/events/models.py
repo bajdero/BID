@@ -29,10 +29,7 @@ class EventStatus(str, Enum):
     """
     WAS = "was"
     WILL = "will"
-    # TODO: Add future statuses here as they become available, e.g.:
-    # LIVE = "live"
-    # CANCELLED = "cancelled"
-    # POSTPONED = "postponed"
+    NOW = "now"
 
     @classmethod
     def from_str(cls, value: str) -> EventStatus:
@@ -196,13 +193,10 @@ class Schedule:
 
     @property
     def active_events(self) -> tuple[Event, ...]:
-        """Only events with status ``WAS`` — the ones to sort photos into.
+        """Only events with status ``WAS`` or ``NOW`` — the ones to sort photos into.
 
-        # TODO: When additional statuses need processing, extend the filter
-        # condition here. For example:
-        #   return tuple(e for e in self.events if e.status in (EventStatus.WAS, EventStatus.LIVE))
         """
-        return tuple(e for e in self.events if e.status == EventStatus.WAS)
+        return tuple(e for e in self.events if e.status in (EventStatus.WAS, EventStatus.NOW))
 
     @property
     def time_range(self) -> tuple[datetime, datetime] | None:

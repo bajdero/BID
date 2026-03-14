@@ -186,7 +186,7 @@ class EventsWindow(tk.Toplevel):
             subfolder = folder_map.get(event.id, "")
             n_photos = photo_counts.get(subfolder, 0)
             status = event.status.value if hasattr(event.status, "value") else str(event.status)
-            tag = status if status in ("was", "will") else ""
+            tag = status if status in ("was", "will", "now") else ""
 
             self._tl.insert("", "end",
                             values=(idx, czas, event.name, subfolder or "---", n_photos, status),
