@@ -8,7 +8,7 @@ import os
 from pathlib import Path
 from datetime import datetime
 
-logger = logging.getLogger("Yapa_CM")
+logger = logging.getLogger("BID")
 
 class ProjectManager:
     projects_dir = Path(__file__).parent.parent / "projects"

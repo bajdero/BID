@@ -611,3 +611,140 @@ def test_exif_additional_tags(ref):
                 
     if missing_rest:
         raise ValueError(f"[{filename}] Brakuje pobocznych tagów EXIF z referencji: {', '.join(missing_rest)}")
+
+
+# ─────────────────────────────────────────────────────────────────────
+# TESTY WYMIARÓW OBRAZU — TEST-DIM-001 do TEST-DIM-005
+# Weryfikują, że get_all_exif zawsze zwraca ImageWidth i ImageLength,
+# nawet gdy plik nie posiada tych tagów w EXIF (fallback na PIL).
+# ─────────────────────────────────────────────────────────────────────
+
+def _get_test_source_images():
+    """Zwraca listę (filename, path) dla wszystkich obrazów w test/source/."""
+    from pathlib import Path
+    source_dir = Path("test/source")
+    if not source_dir.exists():
+        return []
+    exts = {".jpg", ".jpeg", ".tif", ".tiff", ".png"}
+    return [
+        p for p in sorted(source_dir.iterdir())
+        if p.suffix.lower() in exts
+    ]
+
+
+@pytest.mark.parametrize("img_path", _get_test_source_images(), ids=lambda p: p.name)
+def test_image_size_present_in_test_sources(img_path):
+    """TEST-DIM-001: get_all_exif musi zwrócić ImageWidth i ImageLength
+    dla każdego obrazu testowego — nawet bez tagów EXIF w pliku.
+    """
+    with Image.open(img_path) as img:
+        exif = get_all_exif(img)
+        pil_w, pil_h = img.width, img.height
+
+    img_w = exif.get("ImageWidth") or exif.get("ExifImageWidth")
+    img_h = exif.get("ImageLength") or exif.get("ExifImageHeight")
+
+    assert img_w is not None, (
+        f"{img_path.name}: brak pola szerokości (ImageWidth/ExifImageWidth) w EXIF — "
+        f"PIL zna rozmiar {pil_w}x{pil_h}"
+    )
+    assert img_h is not None, (
+        f"{img_path.name}: brak pola wysokości (ImageLength/ExifImageHeight) w EXIF — "
+        f"PIL zna rozmiar {pil_w}x{pil_h}"
+    )
+    assert int(img_w) > 0, f"{img_path.name}: ImageWidth = 0"
+    assert int(img_h) > 0, f"{img_path.name}: ImageLength = 0"
+
+
+@pytest.mark.parametrize("img_path", _get_test_source_images(), ids=lambda p: p.name)
+def test_aspect_ratio_computable_for_test_sources(img_path):
+    """TEST-DIM-002: Na podstawie wymiarów z get_all_exif można obliczyć aspect ratio."""
+    with Image.open(img_path) as img:
+        exif = get_all_exif(img)
+
+    img_w = int(exif.get("ImageWidth") or exif.get("ExifImageWidth", 0))
+    img_h = int(exif.get("ImageLength") or exif.get("ExifImageHeight", 0))
+
+    assert img_w > 0 and img_h > 0, (
+        f"{img_path.name}: nie można obliczyć aspect ratio — wymiary={img_w}x{img_h}"
+    )
+    ratio = round(img_w / img_h, 2)
+    assert ratio > 0, f"{img_path.name}: nieprawidłowe aspect ratio {ratio}"
+
+
+def test_image_dimensions_always_from_pil(tmp_path):
+    """TEST-DIM-003: get_all_exif zawsze zwraca wymiary z PIL (img.width/img.height),
+    niezależnie od tego czy EXIF zawiera tagi wymiarów czy nie.
+    """
+    img_path = tmp_path / "no_dims.jpg"
+    # Tworzenie obrazu BEZ tagów ImageWidth/ImageLength w EXIF
+    img_new = Image.new("RGB", (800, 600))
+    exif = img_new.getexif()
+    exif[0x0132] = "2024:06:01 10:00:00"  # tylko DateTime, bez wymiarów
+    img_new.save(img_path, "JPEG", exif=exif.tobytes())
+
+    with Image.open(img_path) as opened:
+        result = get_all_exif(opened)
+
+    assert result.get("ImageWidth") == "800", (
+        f"Oczekiwano ImageWidth=800, dostałem {result.get('ImageWidth')!r}"
+    )
+    assert result.get("ImageLength") == "600", (
+        f"Oczekiwano ImageLength=600, dostałem {result.get('ImageLength')!r}"
+    )
+
+
+def test_image_dimensions_pil_overrides_exif(tmp_path):
+    """TEST-DIM-004: get_all_exif zawsze używa PIL img.width/img.height,
+    nawet gdy EXIF zawiera inne (nieprawidłowe) wartości wymiarów.
+    PIL jest zawsze autorytatywnym źródłem rozdzielczości.
+    """
+    img_path = tmp_path / "wrong_exif_dims.jpg"
+    # Obraz rzeczywisty: 1000x800 — w EXIF ustawiamy błędne wartości
+    img_new = Image.new("RGB", (1000, 800))
+    exif = img_new.getexif()
+    exif[256] = 9999  # ImageWidth — celowo błędna wartość
+    exif[257] = 9999  # ImageLength — celowo błędna wartość
+    img_new.save(img_path, "JPEG", exif=exif.tobytes())
+
+    with Image.open(img_path) as opened:
+        result = get_all_exif(opened)
+
+    # PIL powinien zawsze wygrać — zwraca rzeczywiste wymiary 1000x800
+    assert result.get("ImageWidth") == "1000", (
+        f"Oczekiwano ImageWidth=1000 (z PIL), dostałem {result.get('ImageWidth')!r}"
+    )
+    assert result.get("ImageLength") == "800", (
+        f"Oczekiwano ImageLength=800 (z PIL), dostałem {result.get('ImageLength')!r}"
+    )
+
+
+def test_image_dimensions_match_pil_for_test_sources(img_path=None):
+    """TEST-DIM-005: Wymiary zwracane przez get_all_exif zgadzają się
+    z PIL img.width / img.height dla każdego obrazu testowego.
+    """
+    from pathlib import Path
+
+    source_dir = Path("test/source")
+    if not source_dir.exists():
+        pytest.skip("Brak folderu test/source")
+
+    exts = {".jpg", ".jpeg", ".tif", ".tiff", ".png"}
+    failures = []
+    for img_path in sorted(source_dir.iterdir()):
+        if img_path.suffix.lower() not in exts:
+            continue
+        with Image.open(img_path) as img:
+            pil_w, pil_h = img.width, img.height
+            result = get_all_exif(img)
+
+        w = int(result.get("ImageWidth") or result.get("ExifImageWidth", 0))
+        h = int(result.get("ImageLength") or result.get("ExifImageHeight", 0))
+
+        if w != pil_w or h != pil_h:
+            failures.append(
+                f"{img_path.name}: EXIF={w}x{h}, PIL={pil_w}x{pil_h}"
+            )
+
+    if failures:
+        pytest.fail("Niezgodność wymiarów EXIF vs PIL:\n" + "\n".join(failures))

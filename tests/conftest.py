@@ -6,7 +6,7 @@ from pathlib import Path
 from PIL import Image
 import logging
 
-LOGGER_NAME = "Yapa_CM"
+LOGGER_NAME = "BID"
 
 @pytest.fixture
 def temp_dir(tmp_path):

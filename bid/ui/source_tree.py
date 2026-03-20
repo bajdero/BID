@@ -5,6 +5,9 @@ Widget listy plików źródłowych — SourceTree.
 from __future__ import annotations
 
 import logging
+import os
+import platform
+import subprocess
 
 import _tkinter
 import tkinter as tk
@@ -16,7 +19,18 @@ if TYPE_CHECKING:
 
 from bid.source_manager import SourceState
 
-logger = logging.getLogger("Yapa_CM")
+logger = logging.getLogger("BID")
+
+# Ikony statusu prepend do nazwy pliku
+_STATE_ICON: dict[str, str] = {
+    SourceState.NEW:        "\u25cf ",   # ● — szare koło
+    SourceState.PROCESSING: "\u23f3 ",   # ⏳ — klepsydra
+    SourceState.OK:         "\u2713 ",   # ✓ — zielony ptaszek
+    SourceState.OK_OLD:     "\u2713 ",   # ✓ — zielony ptaszek (stary eksport)
+    SourceState.ERROR:      "\u2717 ",   # ✗ — czerwony krzyżyk
+    SourceState.DELETED:    "\u2717 ",   # ✗ — szary krzyżyk
+    SourceState.SKIP:       "\u2298 ",   # ⊘ — przekreślony okrąg
+}
 
 
 class SourceTree(tk.Frame):
@@ -41,17 +55,19 @@ class SourceTree(tk.Frame):
 
         self.source_tree = ttk.Treeview(
             self,
-            columns=["rozmiar", "date", "path"],
-            displaycolumns=["rozmiar", "date"],
+            columns=["rozmiar", "date", "event", "path"],
+            displaycolumns=["rozmiar", "date", "event"],
             height=23,
             selectmode="browse",
         )
         self.source_tree.column("#0",      width=200)
         self.source_tree.column("rozmiar", width=80)
         self.source_tree.column("date",    width=120)
-        self.source_tree.heading("#0",      text="Nazwa",   anchor=tk.W)
-        self.source_tree.heading("rozmiar", text="Rozmiar", anchor=tk.W)
-        self.source_tree.heading("date",    text="Data",    anchor=tk.W)
+        self.source_tree.column("event",   width=145)
+        self.source_tree.heading("#0",      text="Nazwa",     anchor=tk.W)
+        self.source_tree.heading("rozmiar", text="Rozmiar",   anchor=tk.W)
+        self.source_tree.heading("date",    text="Data",      anchor=tk.W)
+        self.source_tree.heading("event",   text="Zdarzenie", anchor=tk.W)
 
         # TODO: UX/UI: Zamiast kolorowania całego tła wiersza (co może być jaskrawe/nieczytelne), użyć ikon statusu (np. ✅, ❌, ⏳) w nowej kolumnie "Status". Kolory można zarezerwować tylko dla ikony lub delikatnego paska z lewej strony.
         self.source_tree.tag_configure(SourceState.NEW,        background="light gray")
@@ -86,7 +102,7 @@ class SourceTree(tk.Frame):
     # ------------------------------------------------------------------
 
     def change_tag(self, folder: str, photo: str, tag: str) -> None:
-        """Zmienia tag (kolor) wpisu w drzewie.
+        """Zmienia tag (kolor + ikona statusu) wpisu w drzewie.
 
         Args:
             folder: Nazwa folderu / autora.
@@ -94,8 +110,10 @@ class SourceTree(tk.Frame):
             tag:    Wartość z klasy SourceState.
         """
         logger.debug(f"Zmieniam tag: {folder}/{photo} → {tag}")
+        icon = _STATE_ICON.get(tag, "")
+        new_label = f"{icon}{photo}"
         try:
-            self.source_tree.item(f"{folder}_{photo}", tags=tag)
+            self.source_tree.item(f"{folder}_{photo}", tags=tag, text=new_label)
         except _tkinter.TclError as exc:
             logger.warning(f"Nie można zmienić tagu {folder}/{photo}: {exc}")
 
@@ -117,19 +135,26 @@ class SourceTree(tk.Frame):
 
             for file, meta in list(photos.items()):
                 try:
+                    icon = _STATE_ICON.get(meta["state"], "")
                     self.source_tree.insert(
                         folder,
                         "end",
                         id=f"{folder}_{file}",
-                        text=file,
-                        values=[meta["size"], meta["created"], meta["path"]],
+                        text=f"{icon}{file}",
+                        values=[meta["size"], meta["created"],
+                                meta.get("event_folder", ""), meta["path"]],
                         tags=meta["state"],
                     )
                 except _tkinter.TclError:
-                    # Plik już istnieje — odśwież tylko tag (stan mógł się zmienić)
+                    # Plik już istnieje — odśwież tag, ikonę i wartości (rozmiar, data)
                     try:
+                        icon = _STATE_ICON.get(meta["state"], "")
                         self.source_tree.item(
-                            f"{folder}_{file}", tags=meta["state"]
+                            f"{folder}_{file}",
+                            tags=meta["state"],
+                            text=f"{icon}{file}",
+                            values=[meta["size"], meta["created"],
+                                    meta.get("event_folder", ""), meta["path"]]
                         )
                     except _tkinter.TclError:
                         pass
@@ -174,13 +199,39 @@ class SourceTree(tk.Frame):
             self.root.details_panel.update_details(folder, photo, meta)
 
     def _build_context_menu(self) -> None:
-        """Tworzy menu kontekstowe."""
-        # TODO: UX/UI: Dodać argumenty `image=` do `add_command` aby w menu kontekstowym pojawiły się małe ikony akcji (np. odśwież, usuń). Zwiększy to profesjonalizm.
+        """Tworzy menu kontekstowe (tylko język polski)."""
         self.context_menu = tk.Menu(self, tearoff=0)
-        self.context_menu.add_command(label="Rerun all / Przetwórz ponownie", command=self._rerun_selected)
-        self.context_menu.add_command(label="Skip / Pomiń (Delete from list)", command=self._skip_selected)
+        self.context_menu.add_command(label="Przetwórz ponownie", command=self._rerun_selected)
+        self.context_menu.add_command(label="Wymuś przetworzenie", command=self._force_rework_selected)
+        self.context_menu.add_command(label="Pomin (usuń z listy)", command=self._skip_selected)
         self.context_menu.add_separator()
-        self.context_menu.add_command(label="Refresh / Odśwież", command=lambda: self.root.update_source())
+        self.context_menu.add_command(label="Właściwości", command=self._open_properties)
+        self.context_menu.add_command(label="Otwórz lokalizację", command=self._open_in_explorer)
+        self.context_menu.add_separator()
+        self.context_menu.add_command(label="Odśwież", command=lambda: self.root.update_source())
+
+    # ------------------------------------------------------------------
+    # Pomocnicza: ustalenie bieżącej ścieżki
+    # ------------------------------------------------------------------
+
+    def _get_selected_path(self) -> tuple[str | None, str | None, str | None]:
+        """Zwraca (folder, photo_or_none, path_or_none) dla wybranego wiersza."""
+        selected = self.source_tree.selection()
+        if not selected:
+            return None, None, None
+        item_id = selected[0]
+        if "_" in item_id:
+            folder, photo = item_id.split("_", 1)
+            meta = self.root.source_dict.get(folder, {}).get(photo, {})
+            return folder, photo, meta.get("path")
+        else:
+            # folder node: bierz ścieżkę pierwszego pliku w folderze
+            folder = item_id
+            photos = self.root.source_dict.get(folder, {})
+            if photos:
+                first_meta = next(iter(photos.values()))
+                return folder, None, os.path.dirname(first_meta.get("path", ""))
+            return folder, None, None
 
     def _show_context_menu(self, event: tk.Event) -> None:
         """Wyświetla menu kontekstowe pod kursorem."""
@@ -199,6 +250,65 @@ class SourceTree(tk.Frame):
         self.root.source_dict[folder][photo]["exported"] = {}
         self.change_tag(folder, photo, SourceState.NEW)
         self.root.scan_photos()
+
+    def _force_rework_selected(self) -> None:
+        """Wymusza ponowne przetworzenie — plik lub cały folder."""
+        selected = self.source_tree.selection()
+        if not selected:
+            return
+        item_id = selected[0]
+        if "_" in item_id:
+            # Pojedynczy plik — resetuj wszystkie profile
+            folder, photo = item_id.split("_", 1)
+            self._reset_photo(folder, photo)
+        else:
+            # Cały folder
+            folder = item_id
+            for photo in list(self.root.source_dict.get(folder, {}).keys()):
+                self._reset_photo(folder, photo)
+        self.root.scan_photos()
+
+    def _reset_photo(self, folder: str, photo: str) -> None:
+        """Ustawia stan zdjęcia na NEW i czyści eksporty."""
+        self.root.source_dict[folder][photo]["state"] = SourceState.NEW
+        self.root.source_dict[folder][photo]["exported"] = {}
+        self.change_tag(folder, photo, SourceState.NEW)
+
+    def _open_properties(self) -> None:
+        """Otwiera właściwości pliku/folderu w systemie."""
+        _, _, path = self._get_selected_path()
+        if not path or not os.path.exists(path):
+            return
+        try:
+            if platform.system() == "Windows":
+                import ctypes
+                ctypes.windll.shell32.ShellExecuteW(None, "properties", path, None, None, 0)
+            else:
+                subprocess.Popen(["xdg-open", path])
+        except Exception as exc:
+            logger.warning(f"Nie można otworzyć właściwości: {exc}")
+
+    def _open_in_explorer(self) -> None:
+        """Otwiera lokalizację pliku/folderu w eksploratorze plików."""
+        _, photo, path = self._get_selected_path()
+        if not path:
+            return
+        # Dla pliku — otwieramy folder nadrzędny
+        target = os.path.dirname(path) if photo and os.path.isfile(path) else path
+        if not os.path.exists(target):
+            return
+        try:
+            if platform.system() == "Windows":
+                if photo and os.path.isfile(path):
+                    subprocess.Popen(["explorer", "/select,", path])
+                else:
+                    subprocess.Popen(["explorer", target])
+            elif platform.system() == "Darwin":
+                subprocess.Popen(["open", target])
+            else:
+                subprocess.Popen(["xdg-open", target])
+        except Exception as exc:
+            logger.warning(f"Nie można otworzyć eksploratora: {exc}")
 
     def _skip_selected(self) -> None:
         """Oznacza wybrane zdjęcie jako SKIP."""

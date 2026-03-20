@@ -40,12 +40,14 @@ from bid.source_manager import (
     load_source_dict,
     save_source_dict,
     update_source_dict,
+    monitor_incomplete_files,
 )
 from bid.ui.preview import PrevWindow
 from bid.ui.source_tree import SourceTree
 from bid.ui.details_panel import DetailsPanel
+from bid.ui.toast import init_toasts, show_toast
 
-logger = logging.getLogger("Yapa_CM")
+logger = logging.getLogger("BID")
 
 
 class MainApp(tk.Tk):
@@ -131,10 +133,36 @@ class MainApp(tk.Tk):
         save_source_dict(self.source_dict, project_path)
 
         # ----------------------------------------------------------------
+        # Event-based sorting (optional — active when event_sources.json exists)
+        # ----------------------------------------------------------------
+        from bid.events.manager import EventManager
+        self.event_manager = EventManager(project_path)
+        self._event_queue: queue.Queue = queue.Queue(maxsize=1)
+        self._event_refresh_id: str | None = None
+        if self.event_manager.sources:
+            try:
+                self.event_manager.load_all()
+                if self.event_manager.has_events:
+                    self.event_manager.annotate(self.source_dict)
+                    self.event_manager.ensure_export_folders(
+                        self.export_folder, self.export_settings
+                    )
+                    save_source_dict(self.source_dict, project_path)
+                    logger.info(
+                        f"[EVENT] Event sorting active: "
+                        f"{len(self.event_manager.folder_map) - 1} event folders"
+                    )
+            except Exception as exc:
+                logger.error(f"[EVENT] Failed to initialize events: {exc}")
+
+        # ----------------------------------------------------------------
         # UI — Układ główny
         # ----------------------------------------------------------------
         # Pasek menu
         self._build_main_menu()
+
+        # Pasek narzędzi
+        self._build_toolbar()
 
         # Główny kontener
         # TODO: UX/UI: Użyć nowocześniejszego layoutu (np. grid zamiast pack) dla lepszego skalowania i dodania marginesów.
@@ -178,22 +206,32 @@ class MainApp(tk.Tk):
         # Stan przetwarzania
         # ----------------------------------------------------------------
         self.active_scanning: dict[Future, tuple[str, str]] = {}
-        self.max_workers: int = os.cpu_count() or 4
+        self.max_workers: int = min(os.cpu_count(), 3)
         self.executor = ThreadPoolExecutor(max_workers=self.max_workers)
+        self.scan_count: int = 0  # Counter for cleanup every 10 scans
+        self._dict_dirty: bool = False  # True when source_dict needs saving
 
         self.update_source_thread: threading.Thread | None = None
+        self.file_monitor_thread: threading.Thread | None = None
         self.find_new: bool = False
         self.dict_lock = threading.Lock()
         self._stop_event = threading.Event()
         self._update_queue: queue.Queue = queue.Queue(maxsize=1)
+        self._monitor_queue: queue.Queue = queue.Queue(maxsize=1)
 
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
         self.deiconify()  # show main window now that init is complete
         self._running = True
 
+        init_toasts(self)  # inicjalizuj system powiadomień
+        self.after(5000, self._periodic_save)  # start debounced save loop
+        self.monitor_incomplete()  # Start background file monitor
         self.update_source()
         self.scan_photos()
+        self._update_events_toolbar()
+        if self.event_manager.sources:
+            self._schedule_events_refresh()
 
     # ================================================================
     # Project selection helpers (Toplevel dialogs — no extra tk.Tk)
@@ -266,9 +304,42 @@ class MainApp(tk.Tk):
         action_menu = tk.Menu(menubar, tearoff=0)
         action_menu.add_command(label="Aktualizuj listę (Scan source)", command=self.update_source)
         action_menu.add_command(label="Rozpocznij eksport", command=self.scan_photos)
+        action_menu.add_separator()
+        action_menu.add_command(label="Nowy profil eksportu...", command=self.on_new_export_profile)
+        action_menu.add_separator()
+        action_menu.add_command(label="Zdarzenia (JSON)...", command=self._show_events_window)
         menubar.add_cascade(label="Akcje", menu=action_menu)
 
         self.config(menu=menubar)
+
+    def on_new_export_profile(self) -> None:
+        """Otwiera kreator nowego profilu eksportu."""
+        from bid.ui.export_wizard import run_export_profile_wizard
+        import json
+        success, name, profile = run_export_profile_wizard(parent=self)
+        if not success:
+            return
+        if name in self.export_settings:
+            messagebox.showerror(
+                "Profil już istnieje",
+                f"Profil '{name}' już istnieje. Zmień nazwę lub usuń stary profil."
+            )
+            return
+        self.export_settings[name] = profile
+        # Utwórz folder eksportu dla nowego profilu
+        dest = os.path.join(self.export_folder, name)
+        os.makedirs(dest, exist_ok=True)
+        # Zapisz zaktualizowaną konfigurację
+        export_options_path = self.project_path / "export_option.json"
+        try:
+            with open(export_options_path, "w", encoding="utf-8") as f:
+                json.dump(self.export_settings, f, ensure_ascii=False, indent=4)
+            logger.info(f"Zapisano nowy profil eksportu: {name}")
+        except Exception as exc:
+            messagebox.showerror("Błąd zapisu", f"Nie można zapisać profilu eksportu: {exc}")
+            return
+        # Uruchom skanowanie — nowy profil będzie przetworzony dla plików NEW
+        self.scan_photos()
 
     def on_open_project(self) -> None:
         """Otwiera dialog wyboru folderu projektu."""
@@ -285,15 +356,176 @@ class MainApp(tk.Tk):
                 messagebox.showerror("Błąd", "Wybrany folder nie jest poprawnym projektem BID.")
 
     # ================================================================
+    # Event source management
+    # ================================================================
+
+    def _build_toolbar(self) -> None:
+        """Toolbar with events button and status label."""
+        self._toolbar = ttk.Frame(self, relief=tk.FLAT, padding=(4, 2))
+        self._toolbar.pack(side=tk.TOP, fill=tk.X)
+        ttk.Button(
+            self._toolbar, text="\U0001f4c5 Zdarzenia",
+            command=self._show_events_window,
+        ).pack(side=tk.LEFT, padx=(0, 4))
+        self._events_status_var = tk.StringVar(value="")
+        ttk.Label(
+            self._toolbar,
+            textvariable=self._events_status_var,
+            font=("Segoe UI", 9),
+            foreground="#555",
+        ).pack(side=tk.LEFT)
+
+    def _show_events_window(self) -> None:
+        """Open (or raise) the events management window."""
+        from bid.ui.events_window import EventsWindow
+        EventsWindow.show(self)
+
+    def _update_events_toolbar(self) -> None:
+        """Refresh the toolbar label with current event count."""
+        if not hasattr(self, "_events_status_var"):
+            return
+        em = self.event_manager
+        if not em.has_events:
+            self._events_status_var.set(
+                "Brak zdarzeń" if em.sources else ""
+            )
+        else:
+            n = sum(1 for k in em.folder_map if k != "__undefined__")
+            self._events_status_var.set(f"{n} zdarzeń")
+
+    def _events_apply(
+        self,
+        move_files: bool = True,
+        trigger_scan: bool = True,
+    ) -> int:
+        """Load all event sources, annotate photos, optionally move files.
+
+        This is the single entry-point called by EventsWindow, the auto-
+        refresh timer, and the main init path.  Always runs on the main
+        thread (Tk-safe).
+
+        Returns the number of files moved.
+        """
+        from bid.events.sorter import move_exported_files_on_reassignment
+        try:
+            schedules = self.event_manager.load_all()
+            if not schedules:
+                return 0
+            with self.dict_lock:
+                self.event_manager.annotate(self.source_dict)
+                self.event_manager.ensure_export_folders(
+                    self.export_folder, self.export_settings
+                )
+                moved, _errors = (
+                    move_exported_files_on_reassignment(
+                        self.source_dict, self.export_folder
+                    )
+                    if move_files else (0, 0)
+                )
+                self._mark_dirty()
+            self.source_tree.update_tree(self.source_dict)
+            self._update_events_toolbar()
+            if moved:
+                show_toast(
+                    f"Przeniesiono {moved} plik(ów) do folderów zdarzeń",
+                    level="info",
+                )
+            if trigger_scan:
+                self.scan_photos()
+            return moved
+        except Exception as exc:
+            logger.error(f"[EVENT] _events_apply failed: {exc}")
+            show_toast(f"Błąd zdarzeń: {exc}", level="error")
+            return 0
+
+    # -- Auto-refresh every 60 s -----------------------------------------
+
+    _EVENT_REFRESH_MS = 60_000
+
+    def _schedule_events_refresh(self) -> None:
+        """Schedule the next background event refresh in 60 seconds."""
+        if self._stop_event.is_set() or not self.event_manager.sources:
+            return
+        self._event_refresh_id = self.after(
+            self._EVENT_REFRESH_MS, self._start_bg_events_refresh
+        )
+
+    def _start_bg_events_refresh(self) -> None:
+        """Fire a daemon thread to reload URL sources, then poll the result."""
+        if self._stop_event.is_set():
+            return
+
+        old_fp = self.event_manager.schedules_fingerprint()
+
+        def _worker() -> None:
+            try:
+                schedules = self.event_manager.load_all()
+                new_fp = self.event_manager.schedules_fingerprint()
+                self._event_queue.put_nowait(
+                    {"schedules": schedules, "changed": new_fp != old_fp, "error": None}
+                )
+            except Exception as exc:  # noqa: BLE001
+                try:
+                    self._event_queue.put_nowait(
+                        {"schedules": [], "changed": False, "error": str(exc)}
+                    )
+                except queue.Full:
+                    pass
+
+        threading.Thread(target=_worker, daemon=True,
+                         name="event-refresh").start()
+        self.after(300, self._poll_event_queue)
+
+    def _poll_event_queue(self) -> None:
+        """Check for finished background refresh; apply result on main thread."""
+        if self._stop_event.is_set():
+            return
+        try:
+            result = self._event_queue.get_nowait()
+        except queue.Empty:
+            self.after(300, self._poll_event_queue)
+            return
+
+        if result.get("error"):
+            logger.error(f"[EVENT] Auto-refresh error: {result['error']}")
+        elif result.get("schedules"):
+            if not result.get("changed", True):
+                logger.debug("[EVENT] Auto-refresh: no changes in JSON — skipping export scan.")
+            else:
+                from bid.events.sorter import move_exported_files_on_reassignment
+                try:
+                    with self.dict_lock:
+                        self.event_manager.annotate(self.source_dict)
+                        self.event_manager.ensure_export_folders(
+                            self.export_folder, self.export_settings
+                        )
+                        moved, _ = move_exported_files_on_reassignment(
+                            self.source_dict, self.export_folder
+                        )
+                        self._mark_dirty()
+                    self.source_tree.update_tree(self.source_dict)
+                    self._update_events_toolbar()
+                    if moved:
+                        show_toast(
+                            f"[Auto] Przeniesiono {moved} plik(ów)", level="info"
+                        )
+                    logger.info("[EVENT] Auto-refresh complete.")
+                except Exception as exc:
+                    logger.error(f"[EVENT] Auto-refresh apply failed: {exc}")
+
+        self._schedule_events_refresh()
+
+    # ================================================================
     # Przetwarzanie zdjęć
     # ================================================================
 
     def scan_photos(self) -> None:
         """Uruchamia przetwarzanie nowych zdjęć w puli procesów."""
+        
         with self.dict_lock:
             # Policz zdjęcia do przetworzenia dla paska postępu
             total_new = sum(1 for f in self.source_dict for p in self.source_dict[f] 
-                            if self.source_dict[f][p]["state"] == SourceState.NEW)
+                            if self.source_dict[f][p]["state"] in (SourceState.NEW, SourceState.EXPORT_FAIL))
             
             if total_new > 0:
                 self.progress_bar["maximum"] = total_new
@@ -309,8 +541,8 @@ class MainApp(tk.Tk):
             # Tworzymy snapshot bazy (listę krotek), aby uniknąć RuntimeError
             # podczas iteracji, gdyby coś (np. worker) zmieniło dict w międzyczasie.
             for folder, photos in list(self.source_dict.items()):
-                for photo, meta in list(photos.items()):
-                    if meta["state"] == SourceState.NEW:
+                for photo, meta in photos.items():
+                    if meta["state"] in (SourceState.NEW, SourceState.EXPORT_FAIL):
                         # Sprawdź czy już nie jest w kolejce do przetwarzania
                         if any((f, p) == (folder, photo) for f, p in self.active_scanning.values()):
                             continue
@@ -326,8 +558,14 @@ class MainApp(tk.Tk):
     def _submit_photo_task_locked(self, folder: str, photo: str) -> None:
         """Submit task — MUSI być wywołane wewnątrz with self.dict_lock."""
         meta = self.source_dict[folder][photo]
+        old_state = meta["state"]
         meta["state"] = SourceState.PROCESSING
-        logger.info(f"Kolejkuję: {folder}/{photo}")
+        
+        if old_state == SourceState.EXPORT_FAIL:
+            logger.info(f"Reprocesowanie (export_fail): {folder}/{photo}")
+        else:
+            logger.info(f"Kolejkuję: {folder}/{photo}")
+        
         self.source_tree.change_tag(folder, photo, SourceState.PROCESSING)
         
         future = self.executor.submit(
@@ -339,6 +577,7 @@ class MainApp(tk.Tk):
             export_folder=self.export_folder,
             export_settings=self.export_settings,
             existing_exports=meta.get("exported", {}),
+            event_folder=meta.get("event_folder"),
         )
         self.active_scanning[future] = (folder, photo)
         # Use after() to check results periodically
@@ -353,10 +592,11 @@ class MainApp(tk.Tk):
                 result = future.result()
                 self._handle_task_result(folder, photo, result)
             except Exception as exc:
-                self._mark_error(folder, photo, f"Błąd krytyczny procesu: {exc}")
+                with self.dict_lock:
+                    self._mark_error_locked(folder, photo, f"Błąd krytyczny procesu: {exc}")
         
         if done_futures:
-            save_source_dict(self.source_dict, self.project_path)
+            self._mark_dirty()
             self.scan_photos()
         
         if self.active_scanning:
@@ -367,14 +607,15 @@ class MainApp(tk.Tk):
         with self.dict_lock:
             if not result["success"]:
                 self._mark_error_locked(folder, photo, result["error_msg"])
+                show_toast(f"Błąd przetwarzania: {folder}/{photo}", level="error")
                 return
 
             self.source_dict[folder][photo]["state"] = SourceState.OK
             self.source_dict[folder][photo]["duration_sec"] = result["duration"]
             self.source_dict[folder][photo]["exported"].update(result["exported"])
-        
-        logger.debug(f"[PERF] Zdjęcie {folder}/{photo} przetworzone w {result['duration']:.4f}s")
-        self.source_tree.change_tag(folder, photo, SourceState.OK)
+            
+            logger.debug(f"[PERF] Zdjęcie {folder}/{photo} przetworzone w {result['duration']:.4f}s")
+            self.source_tree.change_tag(folder, photo, SourceState.OK)
 
         # Aktualizacja postępu
         self.progress_bar["value"] += 1
@@ -383,6 +624,87 @@ class MainApp(tk.Tk):
             self.status_label.config(text=f"Przetwarzanie... (Pozostało: {int(remaining)})")
         else:
             self.status_label.config(text="Zakończono przetwarzanie")
+
+    def _cleanup_empty_exports(self) -> None:
+        """Removes empty (0B) export files and marks photos for reprocessing.
+        
+        Called automatically every 10 scans to clean up failed exports
+        that left behind empty placeholder files.
+        Photos with deleted exports are marked for reprocessing.
+        """
+        try:
+            export_dir = Path(self.export_folder)
+            if not export_dir.exists():
+                return
+            
+            deleted_files = []  # Track deleted files for reprocessing
+            deleted_count = 0
+            
+            # Clean up profile directories for 0B files
+            for profile_dir in export_dir.iterdir():
+                if not profile_dir.is_dir() or profile_dir.name == "tmp":
+                    continue
+                
+                profile_name = profile_dir.name
+                
+                # Check all files in profile directory
+                for export_file in profile_dir.iterdir():
+                    if export_file.is_file():
+                        try:
+                            # Check if file is exactly 0 bytes
+                            if export_file.stat().st_size == 0:
+                                logger.warning(f"[CLEANUP] Usuwam pusty plik eksportu (0B): {export_file}")
+                                export_file.unlink()
+                                deleted_files.append((profile_name, str(export_file)))
+                                deleted_count += 1
+                        except OSError as e:
+                            logger.error(f"[CLEANUP] Błąd sprawdzenia pliku {export_file}: {e}")
+            
+            # Clean up tmp directory
+            tmp_dir = export_dir / "tmp"
+            if tmp_dir.exists():
+                tmp_count = 0
+                for tmp_file in tmp_dir.iterdir():
+                    if tmp_file.is_file():
+                        try:
+                            logger.debug(f"[CLEANUP] Usuwam pozostały plik tymczasowy: {tmp_file}")
+                            tmp_file.unlink()
+                            tmp_count += 1
+                            deleted_count += 1
+                        except OSError as e:
+                            logger.debug(f"[CLEANUP] Błąd czyszczenia tmp pliku {tmp_file}: {e}")
+                
+                if tmp_count > 0:
+                    logger.info(f"[CLEANUP] Usunięto {tmp_count} pików tymczasowych z export/tmp")
+            
+            # Reprocess photos with deleted exports
+            if deleted_files:
+                with self.dict_lock:
+                    reprocess_count = 0
+                    for profile_name, deleted_path in deleted_files:
+                        # Search through source_dict for photos with this export path
+                        for folder, photos in self.source_dict.items():
+                            for photo_name, meta in photos.items():
+                                exported = meta.get("exported", {})
+                                # Check if this photo had an export in the deleted profile
+                                if profile_name in exported and exported[profile_name] == deleted_path:
+                                    # Mark for reprocessing
+                                    logger.info(f"[CLEANUP] Zaznaczam do reprocesowania: {folder}/{photo_name} (profil: {profile_name})")
+                                    # Remove this profile from exported so it gets reprocessed
+                                    del exported[profile_name]
+                                    # If no more exports, set state to NEW for full reprocessing
+                                    if not exported and meta["state"] != SourceState.NEW:
+                                        meta["state"] = SourceState.NEW
+                                        reprocess_count += 1
+                    
+                    if reprocess_count > 0:
+                        logger.info(f"[CLEANUP] Zaznaczono {reprocess_count} zdjęć do reprocesowania")
+            
+            if deleted_count > 0:
+                logger.info(f"[CLEANUP] Razem usunięto {deleted_count} zbędnych plików")
+        
+        except Exception as exc:
+            logger.error(f"[CLEANUP] Błąd podczas czyszczenia plików: {exc}")
 
     # Te funkcje są teraz zastąpione przez logic w image_processing.py i pool executor
     # def process_photo(self, folder: str, photo: str) -> None: ...
@@ -408,6 +730,11 @@ class MainApp(tk.Tk):
     def _update_source_worker(self) -> None:
         """Wątek roboczy cyklicznego odświeżania source_dict. NIE wywołuje Tkinter."""
         logger.debug("Cykliczne sprawdzanie source i integralności")
+        # Cleanup empty files every 10 scans
+        self.scan_count += 1
+        if self.scan_count % 10 == 0:
+            logger.debug(f"[CLEANUP] Czyszczenie pustych plików eksportu (skan #{self.scan_count})")
+            self._cleanup_empty_exports()
         try:
             with self.dict_lock:
                 # 1. Nowe pliki
@@ -423,7 +750,7 @@ class MainApp(tk.Tk):
                 )
 
                 # 3. Zapis
-                save_source_dict(self.source_dict, self.project_path)
+                self._mark_dirty()
 
             # Wyniki trafiają do kolejki — main thread odbiera przez _poll_update_source.
             # NIE wolno wołać self.after() z wątku roboczego!
@@ -457,11 +784,106 @@ class MainApp(tk.Tk):
 
         # Jeśli cokolwiek wymaga przetworzenia — ruszamy kolejkę
         needs_scan = found_new or any(
-            state in (SourceState.NEW,)
+            state in (SourceState.NEW, SourceState.EXPORT_FAIL)
             for folder_changes in integrity_changes.values()
             for state in folder_changes.values()
         )
         if needs_scan:
+            self.scan_photos()
+
+    # ================================================================
+    # Background File Monitoring (DOWNLOADING → NEW transitions)
+    # ================================================================
+
+    def monitor_incomplete(self) -> None:
+        """Planuje cykliczne monitorowanie niedokończonych plików (co 2 sekundy).
+        
+        FIX-ASYNC: Runs monitor_incomplete_files() in background to update
+        DOWNLOADING files to NEW when they're stable/ready.
+        """
+        if self._stop_event.is_set():
+            return
+        if self.file_monitor_thread is not None and self.file_monitor_thread.is_alive():
+            # Already running
+            pass
+        else:
+            # Start new monitor thread
+            self.file_monitor_thread = threading.Thread(
+                target=self._monitor_incomplete_worker, daemon=True, name="FileMonitor"
+            )
+            self.file_monitor_thread.start()
+        
+        self.after(500, self._poll_monitor_incomplete)
+
+    def _monitor_incomplete_worker(self) -> None:
+        """Wątek roboczy monitorowania niedokończonych plików.
+        
+        FIX-ASYNC: Periodically checks DOWNLOADING files and updates them to NEW
+        when they become stable. Runs blocking is_file_stable() in background.
+        """
+        while not self._stop_event.is_set():
+            try:
+                with self.dict_lock:
+                    # Check for DOWNLOADING files and update when ready
+                    monitor_updates = monitor_incomplete_files(
+                        self.source_dict,
+                        check_interval=2.0,
+                    )
+                
+                # Send updates to UI thread via queue
+                if monitor_updates:
+                    try:
+                        self._monitor_queue.put_nowait(monitor_updates)
+                    except queue.Full:
+                        pass  # main thread still processing previous result
+
+                # Wait before next cycle (2 seconds is built into monitor_incomplete_files)
+                time.sleep(2)
+
+            except Exception as exc:
+                logger.error(f"Błąd monitorowania niedokończonych plików: {exc}")
+                time.sleep(2)
+
+    def _poll_monitor_incomplete(self) -> None:
+        """Odpytuje kolejkę wyników monitorowania — wywoływane tylko na głównym wątku.
+        
+        FIX-ASYNC: When DOWNLOADING files become ready, updates UI and triggers
+        re-scan for processing.
+        """
+        if self._stop_event.is_set():
+            return
+        try:
+            monitor_updates = self._monitor_queue.get_nowait()
+            self._sync_ui_after_monitoring(monitor_updates)
+        except queue.Empty:
+            pass
+        finally:
+            self.after(500, self._poll_monitor_incomplete)
+
+    def _sync_ui_after_monitoring(self, monitor_updates: dict) -> None:
+        """UI sync dla rezultatów monitorowania — wywoływane w main thread.
+        
+        FIX-ASYNC: Applies DOWNLOADING → NEW transitions to UI and triggers
+        re-scan for processing.
+        
+        Args:
+            monitor_updates: Dictionary {folder: {file: is_ready_bool}}
+        """
+        # Count actual transitions (files becoming ready)
+        ready_count = 0
+        for folder, files_dict in monitor_updates.items():
+            for file_name, is_ready in files_dict.items():
+                if is_ready:
+                    # Update state in source_dict
+                    if folder in self.source_dict and file_name in self.source_dict[folder]:
+                        self.source_dict[folder][file_name]["state"] = SourceState.NEW
+                        ready_count += 1
+        
+        # If any files became ready, update UI and trigger scanning
+        if ready_count > 0:
+            logger.info(f"Monitor: {ready_count} files ready for processing")
+            self.source_tree.update_tree(self.source_dict)
+            self._mark_dirty()
             self.scan_photos()
 
     def _mark_error_locked(self, folder: str, photo: str, msg: str) -> None:
@@ -470,11 +892,27 @@ class MainApp(tk.Tk):
         self.source_dict[folder][photo]["state"] = SourceState.ERROR
         self.source_dict[folder][photo]["error_msg"] = msg
         self.source_tree.change_tag(folder, photo, SourceState.ERROR)
-        save_source_dict(self.source_dict, self.project_path)
+        self._mark_dirty()
 
     # ================================================================
     # Pomocnicze
     # ================================================================
+
+    def _mark_dirty(self) -> None:
+        """Mark source_dict as modified; a periodic save will flush it to disk."""
+        self._dict_dirty = True
+
+    def _periodic_save(self) -> None:
+        """Save source_dict to disk every 5 seconds if modified."""
+        if self._dict_dirty and hasattr(self, "source_dict"):
+            try:
+                save_source_dict(self.source_dict, self.project_path)
+                self._dict_dirty = False
+                logger.debug("[SAVE] Periodic save completed")
+            except Exception as exc:
+                logger.error(f"[SAVE] Periodic save failed: {exc}")
+        if not self._stop_event.is_set():
+            self.after(5000, self._periodic_save)
 
     def _mark_error(self, folder: str, photo: str, msg: str) -> None:
         """Oznacza zdjęcie jako błędne i loguje komunikat.
@@ -488,11 +926,21 @@ class MainApp(tk.Tk):
         self.source_dict[folder][photo]["state"] = SourceState.ERROR
         self.source_dict[folder][photo]["error_msg"] = msg
         self.source_tree.change_tag(folder, photo, SourceState.ERROR)
-        save_source_dict(self.source_dict, self.project_path)
+        self._mark_dirty()
 
     def _on_close(self) -> None:
         """Graceful shutdown — sygnalizuje wątkom, że czas kończyć."""
+        if self._event_refresh_id is not None:
+            try:
+                self.after_cancel(self._event_refresh_id)
+            except Exception:
+                pass
         self._stop_event.set()
+        if self._dict_dirty and hasattr(self, "source_dict"):
+            try:
+                save_source_dict(self.source_dict, self.project_path)
+            except Exception:
+                pass
         self.destroy()
 
     def mainloop(self, n: int = 0) -> None:

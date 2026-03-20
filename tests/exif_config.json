@@ -1,0 +1,4 @@
+{
+    "exiftool_path": "test/exiftool-13.51_64/exiftool.exe",
+    "test_images_folder": "test/source"
+}

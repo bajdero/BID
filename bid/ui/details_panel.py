@@ -9,7 +9,7 @@ import tkinter as tk
 from tkinter import ttk
 from typing import TYPE_CHECKING, Dict, Any
 
-logger = logging.getLogger("Yapa_CM")
+logger = logging.getLogger("BID")
 
 if TYPE_CHECKING:
     from bid.app import MainApp
@@ -48,6 +48,14 @@ class DetailsPanel(ttk.Frame):
         exif_container.grid_rowconfigure(0, weight=1)
 
         # --- Sekcja Eksporty ---
+        event_row = ttk.Frame(self)
+        event_row.pack(fill=tk.X, pady=(0, 4))
+        ttk.Label(event_row, text="Zdarzenie:",
+                  font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT)
+        self._event_var = tk.StringVar(value="---")
+        ttk.Label(event_row, textvariable=self._event_var,
+                  font=("Segoe UI", 9)).pack(side=tk.LEFT, padx=(4, 0))
+
         ttk.Label(self, text="Statusy eksportu", font=("Segoe UI", 10, "bold")).pack(anchor=tk.W)
         self.export_tree = ttk.Treeview(self, columns=["status"], height=4, show="tree headings")
         self.export_tree.heading("#0", text="Profil")
@@ -73,11 +81,40 @@ class DetailsPanel(ttk.Frame):
         for item in self.exif_tree.get_children():
             self.exif_tree.delete(item)
         
-        # Podstawowe info na górze
+        # Podstawowe info na górze (sekcja pogrubiona)
+        exif_dict = meta.get("exif", {})
+
+        # Autor z EXIF (Artist) lub pusty jeśli brak
+        artist_raw = exif_dict.get("Artist", "")
+        if not artist_raw or not str(artist_raw).strip():
+            logger.debug(f"[UI] Brak pola Artist w EXIF: {folder}/{photo}")
+            artist_display = ""
+        else:
+            artist_display = str(artist_raw).strip()
+
+        # Wymiary w pikselach i proporcje
+        # Wymiary pochodzą z PIL (zawsze autorytatywne) przechowywane w metadanych indeksu jako ImageWidth/ImageLength
+        # (są ustawiane w get_all_exif() bezpośrednio z img.width/img.height)
+        # img_w = exif_dict.get("ImageWidth", "") or exif_dict.get("ExifImageWidth", "")
+        # img_h = exif_dict.get("ImageLength", "") or exif_dict.get("ExifImageHeight", "")
+        img_w = exif_dict.get("ImageWidth", "")
+        img_h = exif_dict.get("ImageLength", "")
+        try:
+            w_int = int(str(img_w).split()[0]) if img_w else 0
+            h_int = int(str(img_h).split()[0]) if img_h else 0
+        except (ValueError, IndexError):
+            w_int, h_int = 0, 0
+
+        pixel_display = f"{w_int} x {h_int}" if w_int and h_int else "---"
+        ratio_display = f"{round(w_int / h_int, 2)}" if w_int and h_int else "---"
+
         basic_tags = {
             "Rozmiar": meta.get("size", "---"),
             "Data": meta.get("created", "---"),
             "Stan": meta.get("state", "---"),
+            "Autor": artist_display,
+            "Piksele": pixel_display,
+            "Proporcje": ratio_display,
         }
         for k, v in basic_tags.items():
             self.exif_tree.insert("", "end", text=k, values=(v,), tags=("bold",))
@@ -103,6 +140,14 @@ class DetailsPanel(ttk.Frame):
             path = exported.get(deliver, "Brak")
             status = "✓ Istnieje" if path != "Brak" else "---"
             self.export_tree.insert("", "end", text=deliver, values=(status,))
+
+        # --- Zdarzenie ---
+        ef = meta.get("event_folder", "")
+        en = meta.get("event_name", "")
+        if ef:
+            self._event_var.set(f"{ef}" + (f"  —  {en}" if en else ""))
+        else:
+            self._event_var.set("---")
 
         # --- Performance ---
         duration = meta.get("duration_sec")
