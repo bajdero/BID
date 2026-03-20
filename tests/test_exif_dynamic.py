@@ -36,7 +36,7 @@ logger = logging.getLogger("BID")
 def _load_config() -> dict:
     """Wczytuje konfigurację z tests/exif_config.json."""
     if not _CONFIG_PATH.exists():
-        pytest.fail(
+        pytest.skip(
             f"Brak pliku konfiguracyjnego exiftool: {_CONFIG_PATH}. "
             "Utwórz tests/exif_config.json z kluczami 'exiftool_path' i 'test_images_folder'."
         )
@@ -59,7 +59,7 @@ def _find_images(folder: Path) -> list[Path]:
 def _run_exiftool(exiftool: Path, images: list[Path]) -> list[dict]:
     """Uruchamia exiftool i zwraca listę słowników z tagami."""
     if not exiftool.exists():
-        pytest.fail(
+        pytest.skip(
             f"exiftool nie znaleziony: {exiftool}. "
             "Sprawdź klucz 'exiftool_path' w tests/exif_config.json."
         )
@@ -141,14 +141,14 @@ def generated_references(exif_config):
     images_folder = _abs_path(exif_config["test_images_folder"])
 
     if not images_folder.exists():
-        pytest.fail(
+        pytest.skip(
             f"Folder testowych zdjęć nie istnieje: {images_folder}. "
             "Sprawdź klucz 'test_images_folder' w tests/exif_config.json."
         )
 
     images = _find_images(images_folder)
     if not images:
-        pytest.fail(
+        pytest.skip(
             f"Brak zdjęć w folderze: {images_folder}. "
             "Upewnij się, że test/source zawiera pliki JPEG/TIFF."
         )
