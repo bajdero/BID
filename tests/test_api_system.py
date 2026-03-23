@@ -44,3 +44,24 @@ class TestVersion:
     def test_api_version_matches_settings(self, client):
         data = client.get("/api/v1/version").json()
         assert data["api_version"] == settings.API_VERSION
+
+
+class TestQueueMetrics:
+    def test_returns_200(self, client):
+        r = client.get("/api/v1/metrics/queue")
+        assert r.status_code == 200
+
+    def test_body_contains_expected_fields(self, client):
+        data = client.get("/api/v1/metrics/queue").json()
+        assert set(data.keys()) == {
+            "queue_length",
+            "active_workers",
+            "max_workers",
+            "completed_total",
+            "failed_total",
+            "utilization_pct",
+        }
+
+    def test_utilization_bounds(self, client):
+        data = client.get("/api/v1/metrics/queue").json()
+        assert 0.0 <= data["utilization_pct"] <= 100.0
