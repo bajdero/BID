@@ -83,10 +83,13 @@ function New-GhIssue {
 
     # Write body to temp file to avoid quoting issues
     $tmpFile = [System.IO.Path]::GetTempFileName()
-    Set-Content -Path $tmpFile -Value $Body -Encoding UTF8
+    try {
+        Set-Content -Path $tmpFile -Value $Body -Encoding UTF8
 
-    $result = & gh issue create --repo $Repo --title $Title --body-file $tmpFile --milestone $Milestone @labelArgs 2>&1
-    Remove-Item $tmpFile -ErrorAction SilentlyContinue
+        $result = & gh issue create --repo $Repo --title $Title --body-file $tmpFile --milestone $Milestone @labelArgs 2>&1
+    } finally {
+        Remove-Item $tmpFile -ErrorAction SilentlyContinue
+    }
 
     if ($LASTEXITCODE -ne 0) {
         Write-Host " WARNING: $result" -ForegroundColor Red

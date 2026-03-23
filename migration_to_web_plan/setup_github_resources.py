@@ -59,7 +59,9 @@ MILESTONES = [
 # Each entry: title, milestone_title, labels, body
 # ---------------------------------------------------------------------------
 
-def epic_body(problem, in_scope, out_scope, ac_items, deps_milestone, deps_issues=None, dod_extra=None):
+def build_issue_body(problem, in_scope, out_scope, ac_items, deps_milestone,
+                     deps_issues=None, dod_extra=None, epic_reference=None):
+    """Return a formatted GitHub issue body conforming to the project template."""
     ac = "\n".join(f"- [ ] {i}" for i in ac_items)
     in_s = "\n".join(f"- {i}" for i in in_scope)
     out_s = "\n".join(f"- {i}" for i in out_scope)
@@ -76,7 +78,7 @@ def epic_body(problem, in_scope, out_scope, ac_items, deps_milestone, deps_issue
     if dod_extra:
         dod_lines += [f"- [ ] {d}" for d in dod_extra]
     dod = "\n".join(dod_lines)
-    return f"""## Problem Statement
+    body = f"""## Problem Statement
 {problem}
 
 ## Scope
@@ -94,14 +96,13 @@ def epic_body(problem, in_scope, out_scope, ac_items, deps_milestone, deps_issue
 ## Definition of Done
 {dod}
 """
-
-
-def child_body(problem, in_scope, out_scope, ac_items, deps_milestone, deps_issues=None, dod_extra=None):
-    return epic_body(problem, in_scope, out_scope, ac_items, deps_milestone, deps_issues or [], dod_extra)
+    if epic_reference:
+        body += f"\n\n---\n_Part of epic: {epic_reference}_\n"
+    return body
 
 
 # -- Phase 1 epic and children -------------------------------------------
-P1_EPIC_BODY = epic_body(
+P1_EPIC_BODY = build_issue_body(
     problem="BID is a desktop tkinter app. We need to extract its core logic into a REST API so it can be consumed by a web frontend.",
     in_scope=[
         "Extract image-processing logic to a service layer",
@@ -128,7 +129,7 @@ PHASE1_CHILDREN = [
     {
         "title": "Extract image-processing core to service layer",
         "labels": ["type:feature", "priority:p1", "area:backend"],
-        "body": child_body(
+        "body": build_issue_body(
             "The image-processing logic is tightly coupled to the tkinter UI. It must be decoupled into an independently testable service module.",
             ["Move PIL/Pillow operations to `bid/service/image_processor.py`", "Remove all tkinter imports from processing code"],
             ["New UI components", "API endpoints"],
@@ -139,7 +140,7 @@ PHASE1_CHILDREN = [
     {
         "title": "Define REST API contract (OpenAPI/Swagger spec)",
         "labels": ["type:task", "priority:p1", "area:backend"],
-        "body": child_body(
+        "body": build_issue_body(
             "A formal API contract is needed before implementation to ensure frontend/backend alignment.",
             ["Draft OpenAPI 3.0 YAML spec for all Phase 1 endpoints", "Publish spec in repository at `api/openapi.yaml`"],
             ["Implementation of endpoints"],
@@ -150,7 +151,7 @@ PHASE1_CHILDREN = [
     {
         "title": "Implement FastAPI application scaffold",
         "labels": ["type:feature", "priority:p1", "area:backend"],
-        "body": child_body(
+        "body": build_issue_body(
             "We need a runnable FastAPI application as the foundation for all API endpoints.",
             ["Create `backend/` directory with FastAPI app", "Add requirements.txt and pyproject.toml", "Health-check endpoint at `/health`"],
             ["Business-logic endpoints (separate issues)"],
@@ -161,7 +162,7 @@ PHASE1_CHILDREN = [
     {
         "title": "Implement /jobs CRUD endpoints",
         "labels": ["type:feature", "priority:p1", "area:backend"],
-        "body": child_body(
+        "body": build_issue_body(
             "The frontend needs to create, list, retrieve, and cancel processing jobs via the API.",
             ["POST /jobs", "GET /jobs", "GET /jobs/{job_id}", "DELETE /jobs/{job_id} (cancel)"],
             ["WebSocket progress streaming (Phase 2)"],
@@ -172,7 +173,7 @@ PHASE1_CHILDREN = [
     {
         "title": "Implement /export-profiles endpoints",
         "labels": ["type:feature", "priority:p1", "area:backend"],
-        "body": child_body(
+        "body": build_issue_body(
             "Export profiles (fb, insta, etc.) must be manageable through the API, replacing the static JSON file.",
             ["GET /export-profiles", "POST /export-profiles", "PUT /export-profiles/{id}", "DELETE /export-profiles/{id}"],
             ["Profile versioning or history"],
@@ -183,7 +184,7 @@ PHASE1_CHILDREN = [
     {
         "title": "Implement file-upload endpoint (/files/upload)",
         "labels": ["type:feature", "priority:p1", "area:backend"],
-        "body": child_body(
+        "body": build_issue_body(
             "Users need to upload source images through the web interface rather than specifying a local folder path.",
             ["POST /files/upload — multipart file upload", "Store files in configurable upload directory", "Return file ID and metadata"],
             ["Cloud storage integration", "Streaming large files (post-PoC)"],
@@ -194,7 +195,7 @@ PHASE1_CHILDREN = [
     {
         "title": "Implement processed-file download endpoint (/files/download/{id})",
         "labels": ["type:feature", "priority:p1", "area:backend"],
-        "body": child_body(
+        "body": build_issue_body(
             "Users need to download processed output files from the web UI.",
             ["GET /files/download/{file_id}", "Stream file bytes with correct Content-Type", "Return 404 for unknown IDs"],
             ["Bulk ZIP download (future)"],
@@ -205,7 +206,7 @@ PHASE1_CHILDREN = [
     {
         "title": "Add API authentication (API-key header)",
         "labels": ["type:feature", "priority:p1", "area:backend"],
-        "body": child_body(
+        "body": build_issue_body(
             "The API must be protected to prevent unauthorised access.",
             ["API-key validation via `X-API-Key` request header", "Configurable key via environment variable", "Return 401 for missing/invalid key"],
             ["OAuth2 / OIDC (future)", "Per-user keys"],
@@ -216,7 +217,7 @@ PHASE1_CHILDREN = [
     {
         "title": "Containerise backend (Dockerfile + docker-compose)",
         "labels": ["type:infra", "priority:p1", "area:devops"],
-        "body": child_body(
+        "body": build_issue_body(
             "The backend must run reliably across environments via Docker.",
             ["Multi-stage Dockerfile (build + runtime)", "docker-compose.yml with backend service", "Environment variable configuration"],
             ["Kubernetes manifests (Phase 8)", "Production hardening"],
@@ -227,7 +228,7 @@ PHASE1_CHILDREN = [
     {
         "title": "Unit tests for all Phase 1 API endpoints",
         "labels": ["type:test", "priority:p1", "area:backend"],
-        "body": child_body(
+        "body": build_issue_body(
             "Each Phase 1 endpoint needs automated unit tests to prevent regressions.",
             ["pytest + httpx TestClient tests for all endpoints", "Happy path and error cases", "Test coverage ≥ 80%"],
             ["Integration tests (Phase 2+)", "Load tests (Phase 8)"],
@@ -238,7 +239,7 @@ PHASE1_CHILDREN = [
 ]
 
 # -- Phase 2 epic and children -------------------------------------------
-P2_EPIC_BODY = epic_body(
+P2_EPIC_BODY = build_issue_body(
     problem="The API supports long-running batch jobs. The frontend needs real-time progress updates without polling.",
     in_scope=["WebSocket server endpoint", "Event schema", "Event broadcasting in pipeline", "Connection lifecycle management", "WebSocket auth"],
     out_scope=["Frontend WebSocket client (Phase 3)", "Persistent event log API (Phase 7)"],
@@ -251,7 +252,7 @@ PHASE2_CHILDREN = [
     {
         "title": "Implement WebSocket server endpoint (/ws/jobs/{job_id})",
         "labels": ["type:feature", "priority:p1", "area:backend"],
-        "body": child_body(
+        "body": build_issue_body(
             "Clients need a WebSocket endpoint to subscribe to per-job progress events.",
             ["FastAPI WebSocket route `/ws/jobs/{job_id}`", "Broadcast progress events to all subscribers of a job"],
             ["Global broadcast channel", "Persistent history"],
@@ -262,7 +263,7 @@ PHASE2_CHILDREN = [
     {
         "title": "Define event schema (progress, complete, error, cancelled)",
         "labels": ["type:task", "priority:p1", "area:backend"],
-        "body": child_body(
+        "body": build_issue_body(
             "A consistent event schema is needed for frontend parsing and future extensibility.",
             ["JSON schema for event types: progress, complete, error, cancelled", "Document schema in `api/ws_events.md`"],
             ["Custom event types beyond the four defined"],
@@ -273,7 +274,7 @@ PHASE2_CHILDREN = [
     {
         "title": "Integrate event broadcasting into image-processing pipeline",
         "labels": ["type:feature", "priority:p1", "area:backend"],
-        "body": child_body(
+        "body": build_issue_body(
             "The processing pipeline must emit WebSocket events at each stage so the frontend can show live progress.",
             ["Emit `progress` events at file-level granularity", "Emit `complete` / `error` / `cancelled` at job level"],
             ["Buffering/persistence of events"],
@@ -284,7 +285,7 @@ PHASE2_CHILDREN = [
     {
         "title": "Implement connection-lifecycle management (connect/disconnect/reconnect)",
         "labels": ["type:feature", "priority:p1", "area:backend"],
-        "body": child_body(
+        "body": build_issue_body(
             "WebSocket connections can drop; the server must handle this gracefully without leaking resources.",
             ["Clean up subscriptions on disconnect", "Reject connections to unknown job IDs with 4004"],
             ["Server-side reconnect logic (client responsibility)"],
@@ -295,7 +296,7 @@ PHASE2_CHILDREN = [
     {
         "title": "Add WebSocket authentication (token handshake)",
         "labels": ["type:feature", "priority:p1", "area:backend"],
-        "body": child_body(
+        "body": build_issue_body(
             "WebSocket connections must be authenticated to prevent unauthorised job monitoring.",
             ["Accept API key as query param `?token=` on WebSocket upgrade", "Reject unauthenticated connections with 4001"],
             ["Per-user scoping of job visibility"],
@@ -306,7 +307,7 @@ PHASE2_CHILDREN = [
     {
         "title": "Integration tests for WebSocket event flow",
         "labels": ["type:test", "priority:p1", "area:backend"],
-        "body": child_body(
+        "body": build_issue_body(
             "The complete WebSocket flow (connect → process → receive events → disconnect) must be verified by automated tests.",
             ["pytest-asyncio tests covering full job lifecycle via WebSocket", "Test reconnect scenario", "Test auth rejection"],
             ["Browser-level E2E tests (Phase 5)"],
@@ -317,7 +318,7 @@ PHASE2_CHILDREN = [
 ]
 
 # -- Phase 3 epic and children -------------------------------------------
-P3_EPIC_BODY = epic_body(
+P3_EPIC_BODY = build_issue_body(
     problem="There is no web frontend. We need a complete project scaffold wired to the backend API.",
     in_scope=["React+TypeScript+Vite scaffold", "Routing", "State management", "API client", "WebSocket hook", "Base layout", "Login screen", "CI pipeline"],
     out_scope=["Business-logic UI panels (Phase 4+)"],
@@ -330,7 +331,7 @@ PHASE3_CHILDREN = [
     {
         "title": "Initialise frontend project (React + TypeScript + Vite)",
         "labels": ["type:feature", "priority:p1", "area:frontend"],
-        "body": child_body(
+        "body": build_issue_body(
             "No frontend project exists. A properly configured React/TypeScript/Vite project is the foundation for all frontend work.",
             ["Create `frontend/` directory with Vite scaffold", "ESLint + Prettier configuration", "Vitest for unit tests"],
             ["Component library selection (separate issue)"],
@@ -341,7 +342,7 @@ PHASE3_CHILDREN = [
     {
         "title": "Configure routing (React Router v6)",
         "labels": ["type:feature", "priority:p1", "area:frontend"],
-        "body": child_body(
+        "body": build_issue_body(
             "The app needs client-side routing to support multiple pages/views without full page reloads.",
             ["Install React Router v6", "Define route structure: /, /jobs, /jobs/:id, /settings, /profiles", "Protected routes (redirect to login if unauthenticated)"],
             ["Server-side rendering"],
@@ -352,7 +353,7 @@ PHASE3_CHILDREN = [
     {
         "title": "Set up global state management (Zustand)",
         "labels": ["type:feature", "priority:p1", "area:frontend"],
-        "body": child_body(
+        "body": build_issue_body(
             "Shared state (auth token, active job, settings) needs a predictable management solution.",
             ["Install and configure Zustand", "Auth store (token, login/logout actions)", "Jobs store skeleton"],
             ["Server-state caching (React Query — separate issue if needed)"],
@@ -363,7 +364,7 @@ PHASE3_CHILDREN = [
     {
         "title": "Implement API client layer (axios + OpenAPI-generated types)",
         "labels": ["type:feature", "priority:p1", "area:frontend"],
-        "body": child_body(
+        "body": build_issue_body(
             "Frontend components need a typed, consistent way to call the backend REST API.",
             ["axios instance with base URL and auth header injection", "Generate TypeScript types from `api/openapi.yaml`", "Error handling wrapper"],
             ["Caching layer", "Retry logic (beyond simple error handling)"],
@@ -374,7 +375,7 @@ PHASE3_CHILDREN = [
     {
         "title": "Implement WebSocket client hook with auto-reconnect",
         "labels": ["type:feature", "priority:p1", "area:frontend"],
-        "body": child_body(
+        "body": build_issue_body(
             "Components need a reusable React hook to subscribe to job WebSocket events with automatic reconnection.",
             ["useJobWebSocket(jobId) hook", "Exponential backoff reconnect logic (max 5 retries)", "Typed event payloads"],
             ["Global WebSocket connection pooling (future optimisation)"],
@@ -385,7 +386,7 @@ PHASE3_CHILDREN = [
     {
         "title": "Create base layout: header, sidebar nav, main content area",
         "labels": ["type:feature", "priority:p1", "area:frontend"],
-        "body": child_body(
+        "body": build_issue_body(
             "A consistent shell layout is needed as the container for all page content.",
             ["Top header with app title and user/logout", "Left sidebar with nav links", "Main content area with routing outlet", "Responsive breakpoints (min 1024 px wide)"],
             ["Mobile-first / full responsive redesign (future)"],
@@ -396,7 +397,7 @@ PHASE3_CHILDREN = [
     {
         "title": "Implement login / API-key entry screen",
         "labels": ["type:feature", "priority:p1", "area:frontend"],
-        "body": child_body(
+        "body": build_issue_body(
             "Users must enter their API key to authenticate before accessing the app.",
             ["Login page with API-key input", "Validate key against backend `/health` with key", "Store token in auth store on success"],
             ["SSO / OIDC (future)", "Remember-me persistence beyond sessionStorage"],
@@ -407,7 +408,7 @@ PHASE3_CHILDREN = [
     {
         "title": "CI pipeline for frontend (lint + build + unit tests on PR)",
         "labels": ["type:infra", "priority:p1", "area:devops"],
-        "body": child_body(
+        "body": build_issue_body(
             "All frontend PRs must pass automated lint, build, and test checks before merge.",
             ["GitHub Actions workflow: lint → build → vitest on every PR", "Fail fast on lint errors", "Cache node_modules"],
             ["E2E tests in CI (Phase 8)"],
@@ -418,7 +419,7 @@ PHASE3_CHILDREN = [
 ]
 
 # -- Phase 4 epic and children -------------------------------------------
-P4_EPIC_BODY = epic_body(
+P4_EPIC_BODY = build_issue_body(
     problem="The frontend shell exists but has no domain-specific UI. Core panels are needed for basic end-to-end usage.",
     in_scope=["Settings panel", "Export-profile manager", "Source-folder browser", "Job-creation wizard", "Job queue panel", "Image preview", "Component tests"],
     out_scope=["Real-time processing dashboard (Phase 5)", "Advanced file browser (Phase 6)"],
@@ -431,7 +432,7 @@ PHASE4_CHILDREN = [
     {
         "title": "Settings panel (source folder, export folder, global options)",
         "labels": ["type:feature", "priority:p1", "area:frontend"],
-        "body": child_body(
+        "body": build_issue_body(
             "Users need to configure application-wide settings through the UI instead of editing JSON files.",
             ["Form to set source and export folder paths", "Save settings via API", "Reload settings on app start"],
             ["Per-user settings (single-user app for PoC)"],
@@ -442,7 +443,7 @@ PHASE4_CHILDREN = [
     {
         "title": "Export-profile manager (list, create, edit, delete profiles)",
         "labels": ["type:feature", "priority:p1", "area:frontend"],
-        "body": child_body(
+        "body": build_issue_body(
             "Users need a UI to manage export profiles instead of editing export_option.json directly.",
             ["List all profiles", "Create / edit profile form (all fields from export_option.json schema)", "Delete with confirmation"],
             ["Profile import/export as JSON (future)"],
@@ -453,7 +454,7 @@ PHASE4_CHILDREN = [
     {
         "title": "Source-folder browser (read-only tree view)",
         "labels": ["type:feature", "priority:p1", "area:frontend"],
-        "body": child_body(
+        "body": build_issue_body(
             "Users need to see the source folder structure to select session folders for processing.",
             ["Tree view of source folder (API-backed)", "Expand/collapse nodes", "Show file counts per folder"],
             ["File editing or deletion", "Uploading directly through tree (Phase 1 upload endpoint used separately)"],
@@ -464,7 +465,7 @@ PHASE4_CHILDREN = [
     {
         "title": "Job-creation wizard (select sources → choose profile → submit)",
         "labels": ["type:feature", "priority:p1", "area:frontend"],
-        "body": child_body(
+        "body": build_issue_body(
             "Users need a guided multi-step flow to create a processing job.",
             ["Step 1: Select source folder(s)", "Step 2: Choose export profile", "Step 3: Review and submit (POST /jobs)"],
             ["Advanced scheduling or delayed start"],
@@ -475,7 +476,7 @@ PHASE4_CHILDREN = [
     {
         "title": "Job queue panel (list active and recent jobs with status)",
         "labels": ["type:feature", "priority:p1", "area:frontend"],
-        "body": child_body(
+        "body": build_issue_body(
             "Users need visibility into all their jobs: running, completed, and failed.",
             ["Table of jobs with status badges", "Polling or WebSocket refresh every 5 s", "Cancel button for active jobs", "Link to job detail page"],
             ["Pagination beyond 50 jobs (PoC scope)"],
@@ -486,7 +487,7 @@ PHASE4_CHILDREN = [
     {
         "title": "Basic image-preview component (thumbnail + metadata)",
         "labels": ["type:feature", "priority:p2", "area:frontend"],
-        "body": child_body(
+        "body": build_issue_body(
             "Users need a quick preview of processed images without downloading the full file.",
             ["Thumbnail image rendered from /files/download/{id}", "Show metadata: filename, size, dimensions, profile"],
             ["Full lightbox viewer (future)", "Side-by-side before/after (future)"],
@@ -497,7 +498,7 @@ PHASE4_CHILDREN = [
     {
         "title": "Component unit tests (React Testing Library)",
         "labels": ["type:test", "priority:p1", "area:frontend"],
-        "body": child_body(
+        "body": build_issue_body(
             "All Phase 4 components need automated unit tests to prevent UI regressions.",
             ["React Testing Library tests for each Phase 4 component", "Mock API calls with msw", "Coverage ≥ 75% for Phase 4 components"],
             ["Visual regression tests (future)"],
@@ -508,7 +509,7 @@ PHASE4_CHILDREN = [
 ]
 
 # -- PoC Release Readiness epic and children -------------------------------------------
-POC_EPIC_BODY = epic_body(
+POC_EPIC_BODY = build_issue_body(
     problem="Phases 1–4 are complete but have not been validated as a shippable proof-of-concept. We need a release candidate build and stakeholder sign-off before continuing to Phase 5.",
     in_scope=["Build and tag 2.0.0-rc1", "Smoke testing", "Stakeholder demo"],
     out_scope=["Full regression suite (Phase 8)", "Performance testing"],
@@ -521,7 +522,7 @@ POC_CHILDREN = [
     {
         "title": "Release candidate build and smoke test (2.0.0-rc1)",
         "labels": ["type:release", "priority:p0", "area:devops"],
-        "body": child_body(
+        "body": build_issue_body(
             "We need to tag and build the first release candidate to validate that Phases 1–4 are production-ready enough for a PoC.",
             ["Tag commit as 2.0.0-rc1", "Build Docker images", "Run smoke test checklist against staging"],
             ["Full regression suite"],
@@ -532,7 +533,7 @@ POC_CHILDREN = [
     {
         "title": "Internal demo and stakeholder sign-off for PoC",
         "labels": ["type:task", "priority:p0", "area:qa"],
-        "body": child_body(
+        "body": build_issue_body(
             "Stakeholders need to validate the PoC before committing to full development (Phases 5–8).",
             ["Prepare demo script covering core flows", "Conduct demo session", "Collect and document feedback", "Obtain written sign-off"],
             ["External user testing"],
@@ -543,7 +544,7 @@ POC_CHILDREN = [
 ]
 
 # -- Architecture Audit epic and children -------------------------------------------
-AUDIT_EPIC_BODY = epic_body(
+AUDIT_EPIC_BODY = build_issue_body(
     problem="The PoC revealed the overall approach but may have introduced architectural shortcuts. A formal audit is needed before full development to avoid costly rework later.",
     in_scope=["Backend API design review", "Frontend architecture review", "Security review", "Performance baseline"],
     out_scope=["Implementing fixes (tracked as separate issues in Phase 5+)", "External security penetration test"],
@@ -557,7 +558,7 @@ AUDIT_CHILDREN = [
     {
         "title": "Architecture review — backend API design and scalability",
         "labels": ["type:audit", "priority:p1", "area:backend"],
-        "body": child_body(
+        "body": build_issue_body(
             "The PoC backend was built for speed. A formal review is needed to assess scalability and maintainability before Phase 5.",
             ["Review API design against REST best practices", "Assess concurrency model for batch jobs", "Review database/storage strategy"],
             ["Implementing changes (separate issues)"],
@@ -569,7 +570,7 @@ AUDIT_CHILDREN = [
     {
         "title": "Architecture review — frontend state and component model",
         "labels": ["type:audit", "priority:p1", "area:frontend"],
-        "body": child_body(
+        "body": build_issue_body(
             "The frontend state management and component architecture need formal review before building more complex UI in Phases 5–7.",
             ["Review Zustand store design", "Review component hierarchy and prop drilling", "Assess API client and WebSocket hook patterns"],
             ["Implementing changes (separate issues)"],
@@ -581,7 +582,7 @@ AUDIT_CHILDREN = [
     {
         "title": "Security review — authentication and data flow",
         "labels": ["type:audit", "priority:p0", "area:backend"],
-        "body": child_body(
+        "body": build_issue_body(
             "The PoC uses a simple API-key auth. A security review is needed to identify gaps before handling real user data.",
             ["Review API-key storage and transmission", "Review WebSocket auth token handling", "Review file upload/download access control", "OWASP Top-10 checklist for PoC scope"],
             ["Full penetration test (Phase 8)"],
@@ -593,7 +594,7 @@ AUDIT_CHILDREN = [
     {
         "title": "Performance baseline — API latency and WebSocket throughput",
         "labels": ["type:audit", "priority:p1", "area:backend"],
-        "body": child_body(
+        "body": build_issue_body(
             "We need baseline performance numbers to set targets for Phase 8 load testing.",
             ["Measure P50/P95/P99 latency for core endpoints", "Measure WebSocket event throughput for 10 concurrent jobs", "Document results as baseline"],
             ["Optimisation work (post-audit if needed)"],
@@ -605,7 +606,7 @@ AUDIT_CHILDREN = [
     {
         "title": "Audit findings report and remediation plan",
         "labels": ["type:task", "priority:p1", "area:qa"],
-        "body": child_body(
+        "body": build_issue_body(
             "All audit findings need to be consolidated into a single report with a prioritised remediation plan.",
             ["Aggregate findings from all M6 audit issues", "Severity-rate each finding (P0–P2)", "Create GitHub issues for each P0/P1 finding in relevant phase backlogs"],
             ["External publication of report"],
@@ -617,7 +618,7 @@ AUDIT_CHILDREN = [
 ]
 
 # -- Phase 5 epic and children -------------------------------------------
-P5_EPIC_BODY = epic_body(
+P5_EPIC_BODY = build_issue_body(
     problem="Users have no real-time visibility into running jobs beyond the basic queue panel from Phase 4.",
     in_scope=["Real-time progress bars", "Per-file status grid", "Aggregate statistics", "Error detail modal", "Processing history log", "E2E smoke test"],
     out_scope=["Advanced analytics / reporting (future)", "Mobile notifications"],
@@ -630,7 +631,7 @@ PHASE5_CHILDREN = [
     {
         "title": "Real-time per-job progress bar (via WebSocket)",
         "labels": ["type:feature", "priority:p1", "area:frontend"],
-        "body": child_body(
+        "body": build_issue_body(
             "Users need to see live job progress without polling.",
             ["Progress bar component driven by useJobWebSocket hook", "Show percentage and current file name", "Smooth animation"],
             ["ETA calculation (separate issue if needed)"],
@@ -641,7 +642,7 @@ PHASE5_CHILDREN = [
     {
         "title": "Per-file status grid (queued / processing / done / error)",
         "labels": ["type:feature", "priority:p1", "area:frontend"],
-        "body": child_body(
+        "body": build_issue_body(
             "Users need file-level visibility into the processing state of each image in a job.",
             ["Grid/table showing each file with status badge", "Real-time updates via WebSocket events", "Click row to open image preview"],
             ["Virtual scrolling for > 1000 files (future)"],
@@ -652,7 +653,7 @@ PHASE5_CHILDREN = [
     {
         "title": "Aggregate statistics panel (throughput, ETA, error rate)",
         "labels": ["type:feature", "priority:p2", "area:frontend"],
-        "body": child_body(
+        "body": build_issue_body(
             "Users want at-a-glance metrics for a running job.",
             ["Show: files/min throughput, estimated completion time, error count/rate"],
             ["Historical analytics charts (future)"],
@@ -663,7 +664,7 @@ PHASE5_CHILDREN = [
     {
         "title": "Error detail modal with retry / skip actions",
         "labels": ["type:feature", "priority:p1", "area:frontend"],
-        "body": child_body(
+        "body": build_issue_body(
             "When a file fails processing, users need to understand why and take action.",
             ["Modal showing error message, stack trace (dev mode), affected file", "Retry button (calls POST /jobs/{id}/retry-file)", "Skip button (calls POST /jobs/{id}/skip-file)"],
             ["Bulk retry (future)"],
@@ -674,7 +675,7 @@ PHASE5_CHILDREN = [
     {
         "title": "Processing history log (paginated, filterable)",
         "labels": ["type:feature", "priority:p2", "area:frontend"],
-        "body": child_body(
+        "body": build_issue_body(
             "Users need to review past jobs and their outcomes.",
             ["Paginated list of completed/cancelled jobs", "Filter by status, date range, profile", "Link to job detail"],
             ["Full audit trail / event sourcing (future)"],
@@ -685,7 +686,7 @@ PHASE5_CHILDREN = [
     {
         "title": "Dashboard E2E smoke test (Playwright)",
         "labels": ["type:test", "priority:p1", "area:qa"],
-        "body": child_body(
+        "body": build_issue_body(
             "The Phase 5 dashboard needs an automated E2E test to verify the full real-time flow.",
             ["Playwright test: login → create job → watch progress → verify completion", "Run against staging environment"],
             ["Full regression suite (Phase 8)"],
@@ -696,7 +697,7 @@ PHASE5_CHILDREN = [
 ]
 
 # -- Phase 6 epic and children -------------------------------------------
-P6_EPIC_BODY = epic_body(
+P6_EPIC_BODY = build_issue_body(
     problem="Users lack an advanced file browser and cannot search for similar images by visual similarity.",
     in_scope=["Full file-browser component", "Vector embedding generation", "Similarity search endpoint", "Similarity search UI", "Metadata filter sidebar", "Integration tests"],
     out_scope=["Multi-modal search (text + image)", "Cloud storage backends"],
@@ -709,7 +710,7 @@ PHASE6_CHILDREN = [
     {
         "title": "Full file-browser component (navigate source and export trees)",
         "labels": ["type:feature", "priority:p1", "area:frontend"],
-        "body": child_body(
+        "body": build_issue_body(
             "The read-only tree from Phase 4 needs to be extended into a full file browser for both source and export directories.",
             ["Dual-pane layout (source | export)", "Breadcrumb navigation", "File info panel on selection", "Thumbnail strip for image files"],
             ["File editing or deletion through browser"],
@@ -720,7 +721,7 @@ PHASE6_CHILDREN = [
     {
         "title": "Backend: generate and store image embedding vectors",
         "labels": ["type:feature", "priority:p1", "area:backend"],
-        "body": child_body(
+        "body": build_issue_body(
             "Similarity search requires pre-computed vector embeddings for each processed image.",
             ["Generate embeddings after each file is processed (CLIP or similar lightweight model)", "Store embeddings in local vector store (e.g., Chroma or Faiss)"],
             ["Real-time embedding during processing (async background task)"],
@@ -731,7 +732,7 @@ PHASE6_CHILDREN = [
     {
         "title": "Backend: vector-similarity search endpoint (/search/similar)",
         "labels": ["type:feature", "priority:p1", "area:backend"],
-        "body": child_body(
+        "body": build_issue_body(
             "The frontend needs a backend endpoint to query for visually similar images.",
             ["POST /search/similar — accepts image file or file ID, returns top-N similar images", "Configurable N (default 10)", "Return file IDs and similarity scores"],
             ["Approximate nearest-neighbour tuning (future)"],
@@ -742,7 +743,7 @@ PHASE6_CHILDREN = [
     {
         "title": "Frontend: similarity-search UI (upload query image → show results)",
         "labels": ["type:feature", "priority:p1", "area:frontend"],
-        "body": child_body(
+        "body": build_issue_body(
             "Users need a UI to find images visually similar to a query image.",
             ["Upload or select query image", "Call /search/similar", "Display results as image grid with similarity scores"],
             ["Saved search history"],
@@ -753,7 +754,7 @@ PHASE6_CHILDREN = [
     {
         "title": "Metadata-filter sidebar (date, profile, author, status)",
         "labels": ["type:feature", "priority:p2", "area:frontend"],
-        "body": child_body(
+        "body": build_issue_body(
             "Users need to filter the file browser by metadata to find specific images quickly.",
             ["Filter sidebar with date range, export profile, author (source folder), and job status", "Filters apply to file list without page reload"],
             ["Saved filter presets (future)"],
@@ -764,7 +765,7 @@ PHASE6_CHILDREN = [
     {
         "title": "Integration tests for vector-search endpoint",
         "labels": ["type:test", "priority:p1", "area:backend"],
-        "body": child_body(
+        "body": build_issue_body(
             "The vector search flow needs automated integration tests with real image data.",
             ["pytest tests: upload images → process → search → verify results", "Test empty corpus case", "Test invalid query image"],
             ["Accuracy benchmarking (Phase 8 audit scope)"],
@@ -775,7 +776,7 @@ PHASE6_CHILDREN = [
 ]
 
 # -- Phase 7 epic and children -------------------------------------------
-P7_EPIC_BODY = epic_body(
+P7_EPIC_BODY = build_issue_body(
     problem="System events (errors, warnings, completions) are only visible in processing dashboard. A dedicated event/notification system is needed for operational awareness.",
     in_scope=["Event-log viewer", "Notification toasts", "Alert management page", "System-health indicators", "Structured event log API", "E2E tests"],
     out_scope=["External alerting integrations (Slack, PagerDuty — future)", "Log aggregation (ELK/Loki — Phase 8 monitoring)"],
@@ -788,7 +789,7 @@ PHASE7_CHILDREN = [
     {
         "title": "Event-log viewer (streaming table, filter by level/job/time)",
         "labels": ["type:feature", "priority:p1", "area:frontend"],
-        "body": child_body(
+        "body": build_issue_body(
             "Operators need a live view of all system events for debugging and monitoring.",
             ["Streaming table of events via GET /events (SSE or polling)", "Filter by log level (INFO/WARN/ERROR), job ID, and time range", "Auto-scroll with pause-on-hover"],
             ["Full log aggregation backend (Phase 8 monitoring)"],
@@ -799,7 +800,7 @@ PHASE7_CHILDREN = [
     {
         "title": "In-app notification toasts (success / warning / error)",
         "labels": ["type:feature", "priority:p1", "area:frontend"],
-        "body": child_body(
+        "body": build_issue_body(
             "Users need immediate visual feedback for important events without watching the event log.",
             ["Toast notifications for: job complete, job error, system warning", "Auto-dismiss after 5 s (errors require manual dismiss)", "Max 3 toasts visible simultaneously"],
             ["Email or push notifications (future)"],
@@ -810,7 +811,7 @@ PHASE7_CHILDREN = [
     {
         "title": "Alert management page (acknowledge, dismiss, history)",
         "labels": ["type:feature", "priority:p2", "area:frontend"],
-        "body": child_body(
+        "body": build_issue_body(
             "Persistent alerts (system errors, failed jobs) need a dedicated page for lifecycle management.",
             ["List active and historical alerts", "Acknowledge and dismiss actions", "Filter by severity and status"],
             ["Alert routing rules (future)", "SLA tracking"],
@@ -821,7 +822,7 @@ PHASE7_CHILDREN = [
     {
         "title": "System-health indicators (backend uptime, queue depth, error rate)",
         "labels": ["type:feature", "priority:p1", "area:frontend"],
-        "body": child_body(
+        "body": build_issue_body(
             "Operators need at-a-glance system health visibility in the UI.",
             ["Header or dashboard widget: backend status (green/red), job queue depth, rolling 1-h error rate"],
             ["Historical health charts (Phase 8 Grafana dashboard)"],
@@ -832,7 +833,7 @@ PHASE7_CHILDREN = [
     {
         "title": "Backend: structured event log API (/events)",
         "labels": ["type:feature", "priority:p1", "area:backend"],
-        "body": child_body(
+        "body": build_issue_body(
             "The frontend event viewer and alert system need a backend API to query structured events.",
             ["GET /events with pagination and filters (level, job_id, since)", "POST /events/acknowledge/{id}", "Events persisted in database (SQLite for PoC)"],
             ["Event streaming via SSE (optimisation if needed)", "Long-term log archiving"],
@@ -843,7 +844,7 @@ PHASE7_CHILDREN = [
     {
         "title": "E2E tests for event-log and notification flows",
         "labels": ["type:test", "priority:p1", "area:qa"],
-        "body": child_body(
+        "body": build_issue_body(
             "Phase 7 features need automated E2E tests to verify the event system works end-to-end.",
             ["Playwright tests: trigger job error → verify toast → verify event log entry → acknowledge alert"],
             ["Performance testing (Phase 8)"],
@@ -854,7 +855,7 @@ PHASE7_CHILDREN = [
 ]
 
 # -- Release Hardening epic and children -------------------------------------------
-HARDENING_EPIC_BODY = epic_body(
+HARDENING_EPIC_BODY = build_issue_body(
     problem="Development is complete. The system must be hardened for production: no new features, regressions fixed, and code frozen before final deployment.",
     in_scope=["Feature freeze enforcement", "Regression test run", "Code freeze enforcement"],
     out_scope=["New features (frozen)", "Non-critical improvements"],
@@ -867,7 +868,7 @@ HARDENING_CHILDREN = [
     {
         "title": "Feature Freeze Gate — no new features after 2027-01-20",
         "labels": ["type:release", "priority:p0", "area:devops"],
-        "body": child_body(
+        "body": build_issue_body(
             "After 2027-01-20, no new feature PRs may be merged. Only bug fixes, test improvements, and release blockers are permitted.",
             ["Document feature freeze policy in CONTRIBUTING.md", "Add PR label check (CI blocks `type:feature` PRs after freeze date)", "Notify all contributors"],
             ["Retroactive feature additions", "Performance improvements (allowed if non-functional-change)"],
@@ -878,7 +879,7 @@ HARDENING_CHILDREN = [
     {
         "title": "Regression test run against feature-freeze build",
         "labels": ["type:test", "priority:p0", "area:qa"],
-        "body": child_body(
+        "body": build_issue_body(
             "A full regression test run is needed after feature freeze to establish the quality baseline for the release.",
             ["Run full test suite (unit + integration + E2E)", "Document results", "Create issues for all failures"],
             ["New test development (only fixing failures)"],
@@ -889,7 +890,7 @@ HARDENING_CHILDREN = [
     {
         "title": "Code Freeze Gate — only release blockers after 2027-02-24",
         "labels": ["type:release", "priority:p0", "area:devops"],
-        "body": child_body(
+        "body": build_issue_body(
             "After 2027-02-24, only P0 release blocker fixes may be merged. All other changes are deferred to post-2.0.0.",
             ["Update CONTRIBUTING.md with code freeze policy", "CI check blocks non-P0 PRs after code freeze date"],
             ["Hotfixes with explicit release-blocker label exception"],
@@ -900,7 +901,7 @@ HARDENING_CHILDREN = [
 ]
 
 # -- Phase 8 epic and children -------------------------------------------
-P8_EPIC_BODY = epic_body(
+P8_EPIC_BODY = build_issue_body(
     problem="The application is feature-complete but not production-hardened. We need comprehensive testing, CI/CD, and operational infrastructure before the 2.0.0 release.",
     in_scope=["Full E2E suite", "Load tests", "Security audit", "Production Docker", "CI/CD pipeline", "K8s/Compose manifests", "Monitoring", "Runbook"],
     out_scope=["Feature development (frozen)", "Multi-region deployment (future)"],
@@ -913,7 +914,7 @@ PHASE8_CHILDREN = [
     {
         "title": "Full E2E test suite (Playwright — happy path + edge cases)",
         "labels": ["type:test", "priority:p0", "area:qa"],
-        "body": child_body(
+        "body": build_issue_body(
             "A comprehensive E2E suite is needed to validate all user-facing flows before the 2.0.0 production release.",
             ["Happy path: login → create job → monitor → download", "Edge cases: network error, invalid file, cancel mid-job", "Run in CI on every PR to main"],
             ["Accessibility testing (future)"],
@@ -924,7 +925,7 @@ PHASE8_CHILDREN = [
     {
         "title": "Performance / load tests (k6 — 50 concurrent jobs baseline)",
         "labels": ["type:test", "priority:p0", "area:qa"],
-        "body": child_body(
+        "body": build_issue_body(
             "We need to verify the system meets performance targets under realistic load before production.",
             ["k6 load test: 50 concurrent jobs, 500 images each", "Measure P95 API latency and WebSocket event delay", "Compare against M6 baseline"],
             ["Sustained soak testing (future)", "CDN/edge performance"],
@@ -935,7 +936,7 @@ PHASE8_CHILDREN = [
     {
         "title": "Security audit — OWASP Top-10 review + dependency scan",
         "labels": ["type:audit", "priority:p0", "area:qa"],
-        "body": child_body(
+        "body": build_issue_body(
             "Final security audit is required before the 2.0.0 production release.",
             ["OWASP Top-10 checklist for full application", "Dependency vulnerability scan (Trivy or Safety)", "Remediate all P0 findings"],
             ["External penetration test (post-2.0.0 roadmap)"],
@@ -946,7 +947,7 @@ PHASE8_CHILDREN = [
     {
         "title": "Production Dockerfile + docker-compose (multi-stage, non-root)",
         "labels": ["type:infra", "priority:p0", "area:devops"],
-        "body": child_body(
+        "body": build_issue_body(
             "The development Dockerfiles need to be hardened for production: multi-stage builds, non-root user, minimal image size.",
             ["Multi-stage Dockerfile for backend and frontend", "Non-root user in runtime stage", "Production docker-compose with resource limits and restart policies"],
             ["Kubernetes Helm chart (separate issue)"],
@@ -957,7 +958,7 @@ PHASE8_CHILDREN = [
     {
         "title": "GitHub Actions CI/CD pipeline (test → build → push image → deploy)",
         "labels": ["type:infra", "priority:p0", "area:devops"],
-        "body": child_body(
+        "body": build_issue_body(
             "A full CI/CD pipeline is required to automate testing, image building, and deployment for the 2.0.0 release.",
             ["On PR: lint + unit + integration tests", "On merge to main: build images + push to registry + deploy to staging", "On release tag: deploy to production"],
             ["Canary deployments (future)", "Blue/green deployments (future)"],
@@ -968,7 +969,7 @@ PHASE8_CHILDREN = [
     {
         "title": "Kubernetes / Compose production deployment manifests",
         "labels": ["type:infra", "priority:p1", "area:devops"],
-        "body": child_body(
+        "body": build_issue_body(
             "Production deployment needs declarative manifests for reproducible, version-controlled deployments.",
             ["Kubernetes manifests (Deployment, Service, Ingress, ConfigMap, Secret) OR docker-compose production override", "Resource requests/limits defined", "Liveness and readiness probes"],
             ["Helm chart packaging (future)", "Multi-region (future)"],
@@ -979,7 +980,7 @@ PHASE8_CHILDREN = [
     {
         "title": "Monitoring stack (Prometheus metrics + Grafana dashboard)",
         "labels": ["type:infra", "priority:p1", "area:devops"],
-        "body": child_body(
+        "body": build_issue_body(
             "Production operations require observability: metrics collection and dashboarding.",
             ["Backend Prometheus `/metrics` endpoint (job count, processing rate, error rate, latency histograms)", "Grafana dashboard with key panels", "Alert rules for error rate > 5% and P95 latency > 1 s"],
             ["Log aggregation (Loki/ELK — future)", "APM tracing (future)"],
@@ -990,7 +991,7 @@ PHASE8_CHILDREN = [
     {
         "title": "Runbook and operations guide",
         "labels": ["type:task", "priority:p1", "area:devops"],
-        "body": child_body(
+        "body": build_issue_body(
             "Operations team needs a runbook covering deployment, common failure scenarios, and rollback procedures.",
             ["Deployment procedure (step-by-step)", "Rollback procedure", "Common failure scenarios and remediation", "Monitoring dashboard guide", "Contact escalation list"],
             ["Automated runbook testing"],
@@ -1001,7 +1002,7 @@ PHASE8_CHILDREN = [
 ]
 
 # -- Final Deployment epic and children -------------------------------------------
-FINAL_EPIC_BODY = epic_body(
+FINAL_EPIC_BODY = build_issue_body(
     problem="The 2.0.0 release is ready. We need to deploy to production, validate the deployment, and obtain final sign-off.",
     in_scope=["Production deployment of 2.0.0", "Go-Live Gate validation", "Final stakeholder sign-off"],
     out_scope=["Post-2.0.0 features (tracked separately)"],
@@ -1015,7 +1016,7 @@ FINAL_CHILDREN = [
     {
         "title": "Production deployment of release 2.0.0",
         "labels": ["type:release", "priority:p0", "area:devops"],
-        "body": child_body(
+        "body": build_issue_body(
             "Execute the production deployment of BID web version 2.0.0.",
             ["Tag commit as 2.0.0", "Trigger CI/CD production deploy workflow", "Verify deployment health"],
             ["Rollback (separate Go-Live Gate issue covers rollback readiness)"],
@@ -1027,7 +1028,7 @@ FINAL_CHILDREN = [
     {
         "title": "Go-Live Gate — deployment validation and rollback readiness",
         "labels": ["type:release", "priority:p0", "area:devops"],
-        "body": child_body(
+        "body": build_issue_body(
             "Before declaring 2.0.0 live, we must validate the production deployment and confirm rollback capability.",
             ["Execute smoke test checklist against production", "Verify rollback procedure works (test in staging)", "Confirm monitoring alerts are active"],
             ["Full regression in production (pre-deployment E2E covers this)"],
@@ -1039,7 +1040,7 @@ FINAL_CHILDREN = [
     {
         "title": "Final stakeholder sign-off for release 2.0.0",
         "labels": ["type:task", "priority:p0", "area:qa"],
-        "body": child_body(
+        "body": build_issue_body(
             "Release 2.0.0 requires formal stakeholder acceptance before the project can be closed.",
             ["Conduct final demo/walkthrough with stakeholders", "Collect written sign-off", "Publish release notes for 2.0.0"],
             ["Ongoing post-release support (tracked separately)"],
@@ -1054,11 +1055,11 @@ FINAL_CHILDREN = [
 # Helper functions
 # ---------------------------------------------------------------------------
 
-def run(cmd, check=True):
+def run(cmd, warn_on_error=True):
     """Run a shell command and return stdout."""
     print(f"  CMD: {' '.join(cmd)}")
     result = subprocess.run(cmd, capture_output=True, text=True)
-    if check and result.returncode != 0:
+    if warn_on_error and result.returncode != 0:
         print(f"  STDERR: {result.stderr.strip()}", file=sys.stderr)
         # Don't exit — log and continue so we can finish as much as possible
     return result.stdout.strip()
@@ -1283,9 +1284,12 @@ def main():
         for child in children:
             child_labels = child["labels"]
             child_body_text = child["body"]
-            # Append epic reference to child body
+            # Embed epic reference using the body builder's parameter where available;
+            # fall back to appending for pre-built bodies stored in PHASE*_CHILDREN dicts.
             if epic_num:
-                child_body_text += f"\n\n---\n_Part of epic #{epic_num}: {epic_title}_\n"
+                child_body_text = child_body_text.rstrip() + (
+                    f"\n\n---\n_Part of epic #{epic_num}: {epic_title}_\n"
+                )
             create_issue(child["title"], child_labels, child_body_text, ms_num)
             time.sleep(0.5)
 
