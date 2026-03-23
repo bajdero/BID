@@ -1,7 +1,7 @@
 # BID Web Migration — Implementation Plan
 
-> **Version:** 1.0  
-> **Date:** 2026-03-20  
+> **Version:** 1.1  
+> **Date:** 2026-03-23  
 > **Prerequisites:** Python 3.10+, Node.js 20+, Docker (optional)  
 
 ---
@@ -23,7 +23,7 @@ Phase 1 ──► Phase 2 ──► Phase 5 ──► Phase 8
 | **3** | Next.js Frontend Shell | — (parallel with 2) | Medium |
 | **4** | Core UI Components | Phase 3 | High |
 | **5** | Processing Dashboard | Phases 2 + 4 | Medium |
-| **6** | FileBrowser Integration | Phase 3 | Low |
+| **6** | FileBrowser + Vector Search Integration | Phase 3 | Low |
 | **7** | Event System UI | Phase 4 | Medium |
 | **8** | Testing & Deployment | All phases | Medium |
 
@@ -49,25 +49,33 @@ Wrap the existing `bid/` Python package in a FastAPI service layer. Zero changes
    │   │   ├── project.py     # Pydantic: ProjectSettings, ProjectDetails
    │   │   ├── source.py      # Pydantic: PhotoEntry, SourceTree
    │   │   ├── processing.py  # Pydantic: ProcessRequest, ProcessStatus
+   │   │   ├── search.py      # Pydantic: SemanticSearchRequest
+   │   │   ├── users.py       # Pydantic: UserCreate, UserUpdate, UserResponse
+   │   │   ├── audit.py       # Pydantic: AuditLogResponse
    │   │   ├── events.py      # Pydantic: EventSource, Schedule, Event
+   │   │   ├── workflows.py   # Pydantic: Collection, Approval, PublishPack
    │   │   └── auth.py        # Pydantic: LoginRequest, TokenResponse
    │   └── routers/
    │       ├── __init__.py
    │       ├── projects.py    # /api/v1/projects/*
    │       ├── sources.py     # /api/v1/projects/{id}/sources/*
    │       ├── processing.py  # /api/v1/projects/{id}/process/*
+   │       ├── search.py      # /api/v1/projects/{id}/search/*
+   │       ├── users.py       # /api/v1/users/*
+   │       ├── audit.py       # /api/v1/projects/{id}/audit/*
+   │       ├── workflows.py   # /api/v1/projects/{id}/collections|approvals|publish-packs
    │       ├── events.py      # /api/v1/projects/{id}/events/*
    │       └── auth.py        # /api/v1/auth/*
    └── requirements.txt       # fastapi, uvicorn, pydantic, python-jose, passlib
    ```
 
-2. **Create Pydantic models** from existing JSON schemas (settings.json, export_option.json, source_dict entries, Event/Schedule dataclasses).
+2. **Create Pydantic models** from existing JSON schemas and v1.1 API contracts, including `hash_id`, `description`, `tags`, `quality_score`, queue metrics, export conflict resolution, semantic search request, and audit/workflow models.
 
 3. **Implement routers** — each router imports directly from `bid.*` modules and calls existing functions.
 
 4. **Add dependency injection** — `get_project_path(id)` dependency resolves project ID to filesystem path using `ProjectManager`.
 
-5. **Add JWT authentication** — login endpoint, token validation middleware, user store (JSON file).
+5. **Add JWT authentication and authorization** — login/refresh/validate endpoints, token validation middleware, SQLite user store, and role-based access control (Photographer, PR, Admin).
 
 6. **Add CORS middleware** — allow frontend origin.
 
@@ -140,38 +148,58 @@ REQUIREMENTS:
    Use `model_config = ConfigDict(from_attributes=True)` where needed.
 
 2. Create FastAPI routers:
-   - `routers/projects.py`: CRUD for projects
-     GET /api/v1/projects — list recent projects (call get_recent_projects + get_project_details for each)
-     POST /api/v1/projects — create project (body: {name, source_folder, export_folder, export_settings})
-     GET /api/v1/projects/{project_name} — get details
-     DELETE /api/v1/projects/{project_name} — delete project folder
-     GET /api/v1/projects/{project_name}/settings — load settings.json
-     PUT /api/v1/projects/{project_name}/settings — save settings.json
-     GET /api/v1/projects/{project_name}/export-profiles — load export_option.json
-     PUT /api/v1/projects/{project_name}/export-profiles — save export_option.json
+    - `routers/projects.py`: CRUD for projects
+       GET /api/v1/projects — list recent projects (call get_recent_projects + get_project_details for each)
+       POST /api/v1/projects — create project (body: {name, source_folder, export_folder, export_settings})
+       GET /api/v1/projects/{project_name} — get details
+       DELETE /api/v1/projects/{project_name} — delete project folder
+       GET /api/v1/projects/{project_name}/settings — load settings.json
+       PUT /api/v1/projects/{project_name}/settings — save settings.json
+       GET /api/v1/projects/{project_name}/export-profiles — load export_option.json
+       PUT /api/v1/projects/{project_name}/export-profiles — save export_option.json
 
-   - `routers/sources.py`:
-     GET /api/v1/projects/{project_name}/sources — load_source_dict
-     POST /api/v1/projects/{project_name}/sources/scan — create_source_dict (full scan)
-     POST /api/v1/projects/{project_name}/sources/update — update_source_dict (incremental)
-     POST /api/v1/projects/{project_name}/sources/integrity — check_integrity
-     GET /api/v1/projects/{project_name}/sources/{folder}/{photo}/preview — generate thumbnail
-       Use PIL to open the photo, resize to max 800px, return as JPEG response
+    - `routers/sources.py`:
+       GET /api/v1/projects/{project_name}/sources — load_source_dict
+       POST /api/v1/projects/{project_name}/sources/scan — create_source_dict (full scan)
+       POST /api/v1/projects/{project_name}/sources/update — update_source_dict (incremental)
+       POST /api/v1/projects/{project_name}/sources/integrity — check_integrity
+       GET /api/v1/projects/{project_name}/sources/{folder}/{photo}/preview — generate thumbnail
+          Use PIL to open the photo, resize to max 800px, return as JPEG response
 
-   - `routers/processing.py`:
-     POST /api/v1/projects/{project_name}/process — process specific photos
-       Body: {photos: [[folder, photo], ...], profiles: [str] | null}
-       Submit each to ThreadPoolExecutor (max_workers=3)
-       Return 202 Accepted with job ID
-     GET /api/v1/projects/{project_name}/process/status — current queue length + active jobs
+    - `routers/processing.py`:
+       POST /api/v1/projects/{project_name}/process — process specific photos
+          Body: {photos: [[folder, photo], ...], profiles: [str] | null}
+          Submit each to ThreadPoolExecutor (max_workers=3)
+          Return 202 Accepted with job ID
+       GET /api/v1/projects/{project_name}/process/status — current queue length + active jobs
+       GET /api/v1/projects/{project_name}/exports/conflicts — list blocked export conflicts
+       POST /api/v1/projects/{project_name}/exports/conflicts/resolve — resolve one/selection/all conflicts
 
-   - `routers/events.py`:
-     Full CRUD wrapping EventManager methods
+    - `routers/search.py`:
+       POST /api/v1/projects/{project_name}/search/semantic — semantic/vector search
+       POST /api/v1/projects/{project_name}/search/reindex — rebuild embeddings index
 
-   - `routers/auth.py`:
-     POST /api/v1/auth/login — validate credentials, return JWT
-     POST /api/v1/auth/refresh — refresh token
-     GET /api/v1/auth/validate — validate token (for Nginx auth_request)
+    - `routers/users.py`:
+       GET /api/v1/users
+       POST /api/v1/users
+       PUT /api/v1/users/{id}
+       DELETE /api/v1/users/{id}
+
+    - `routers/audit.py`:
+       GET /api/v1/projects/{project_name}/audit/logs — immutable append-only log read API
+
+    - `routers/workflows.py`:
+       GET/POST /api/v1/projects/{project_name}/collections
+       POST /api/v1/projects/{project_name}/approvals
+       POST /api/v1/projects/{project_name}/publish-packs
+
+    - `routers/events.py`:
+       Full CRUD wrapping EventManager methods
+
+    - `routers/auth.py`:
+       POST /api/v1/auth/login — validate credentials, return JWT
+       POST /api/v1/auth/refresh — refresh token
+       GET /api/v1/auth/validate — validate token (for Nginx auth_request)
 
 3. Create `deps.py` with dependency injection:
    - `get_project_path(project_name: str) -> Path` — resolves to projects/{name}/, raises 404 if missing
@@ -192,7 +220,8 @@ REQUIREMENTS:
    ```
 
 6. requirements.txt: fastapi>=0.110, uvicorn[standard], pydantic>=2.0,
-   python-jose[cryptography], passlib[bcrypt], python-multipart
+   python-jose[cryptography], passlib[bcrypt], python-multipart,
+   sqlalchemy>=2.0, alembic, qdrant-client
 
 Generate ALL files with complete, working code. Do not use placeholders or TODOs.
 The API must work with the existing bid/ package without any modifications to it.
@@ -278,7 +307,7 @@ CREATE:
 
 MESSAGE PROTOCOL (all JSON):
 - Server → Client messages always have a "type" field
-- Types: "state_change", "progress", "scan_update", "monitor_update", "error", "pong"
+- Types: "state_change", "progress", "scan_update", "monitor_update", "error", "queue_metrics", "export_conflict", "pong"
 - Client → Server types: "subscribe", "ping"
 
 REQUIREMENTS:
@@ -359,11 +388,33 @@ CREATE THE FOLLOWING:
      triggerScan(name: string): Promise<void>
      triggerUpdate(name: string): Promise<SourceUpdateResult>
      checkIntegrity(name: string): Promise<IntegrityResult>
+       updateDescription(name: string, folder: string, photo: string, description: string): Promise<void>
+       updateTags(name: string, folder: string, photo: string, tags: string[]): Promise<void>
      getPhotoPreview(name: string, folder: string, photo: string): string // URL
      
      // Processing
      processPhotos(name: string, request: ProcessRequest): Promise<{job_id: string}>
      getProcessingStatus(name: string): Promise<ProcessingStatus>
+       getExportConflicts(name: string): Promise<ExportConflict[]>
+       resolveExportConflicts(name: string, request: ConflictResolutionRequest): Promise<void>
+
+       // Search
+       semanticSearch(name: string, request: SemanticSearchRequest): Promise<SearchResult[]>
+       reindexSearch(name: string): Promise<void>
+
+       // System
+       getQueueMetrics(): Promise<QueueMetrics>
+
+       // Users / Audit / Workflows
+       getUsers(): Promise<User[]>
+       createUser(data: UserCreateRequest): Promise<User>
+       updateUser(id: string, data: UserUpdateRequest): Promise<User>
+       deleteUser(id: string): Promise<void>
+       getAuditLogs(name: string, params: AuditFilter): Promise<AuditEvent[]>
+       getCollections(name: string): Promise<Collection[]>
+       createCollection(name: string, data: CreateCollectionRequest): Promise<Collection>
+       submitApproval(name: string, data: ApprovalRequest): Promise<void>
+       schedulePublishPack(name: string, data: PublishPackRequest): Promise<void>
      
      // Events
      getEventSources(name: string): Promise<EventSource[]>
@@ -406,14 +457,19 @@ CREATE THE FOLLOWING:
    }
    
    interface PhotoEntry {
+       hash_id: string;
      path: string;
      state: "downloading" | "new" | "processing" | "ok" | "ok_old" | "error" | "export_fail" | "deleted" | "skip";
      exported: Record<string, string>;
+       description: string;
+       tags: string[];
      size: string;
      size_bytes: number;
      created: string;
      mtime: number;
      exif: Record<string, string>;
+       quality_score: number | null;
+       quality_model: "exif_rules" | "ml" | null;
      error_msg: string | null;
      duration_sec: number | null;
      event_folder: string | null;
@@ -436,6 +492,8 @@ CREATE THE FOLLOWING:
      //   "state_change" / "progress" → invalidate sources query
      //   "scan_update" → invalidate sources query
      //   "monitor_update" → invalidate sources query
+       //   "queue_metrics" → update dashboard metrics query
+       //   "export_conflict" → invalidate conflicts query + show action toast
      //   "error" → show toast notification
      // Return: { isConnected, lastMessage }
    }
@@ -483,7 +541,13 @@ CREATE THE FOLLOWING:
       - Processing (play icon)
       - Events (calendar icon)
       - Export Profiles (settings icon)
+      - Search (search icon)
+      - Collections (layout-grid icon)
+      - Approvals (check-circle icon)
+      - Publish Packs (send icon)
       - Files (hard-drive icon) — FileBrowser
+      - Audit (history icon)
+      - Users (users icon)
       - Settings (gear icon)
     - Initialize WebSocket connection (useProjectWebSocket)
     - Show connection status indicator
@@ -793,17 +857,18 @@ Generate complete, working code for all files.
 
 ---
 
-## Phase 6: FileBrowser Integration
+## Phase 6: FileBrowser + Vector Search Integration
 
 ### Objective
-Embed FileBrowser into the BID web application with shared authentication.
+Embed FileBrowser into the BID web application with shared authentication and deploy the vector index service used by semantic search.
 
 ### Tasks
 
-1. **Docker service** — add FileBrowser to docker-compose.yml.
+1. **Docker services** — add FileBrowser and vector index service (Qdrant) to docker-compose.yml.
 2. **Nginx config** — proxy rules with auth injection.
 3. **Frontend embed** — iframe integration in project files page.
 4. **Auth bridge** — pass BID JWT to FileBrowser via proxy header.
+5. **Backend wiring** — configure `VECTOR_INDEX_URL` and connectivity checks.
 
 ### AI-Ready Prompt — Phase 6
 
@@ -819,12 +884,14 @@ REQUIREMENTS:
 
 CREATE:
 
-1. `docker/docker-compose.yml` — Add FileBrowser service:
+1. `docker/docker-compose.yml` — Add FileBrowser + vector services:
    - Image: filebrowser/filebrowser:v2-alpine
    - Mount shared data volume at /srv
    - Configure proxy auth via command flags:
      --auth.method=proxy --auth.header=X-Auth-User
    - Set --baseurl=/files
+   - Add Qdrant service for semantic search index (e.g., `qdrant/qdrant:latest`)
+   - Add backend env: `VECTOR_INDEX_URL=http://vector:6333`
    - Network: internal only (not exposed to host)
 
 2. `docker/nginx.conf` — Complete Nginx configuration:
@@ -902,6 +969,11 @@ CREATE:
      }
    }
    ```
+
+6. `docker/docker-compose.yml` vector section requirements:
+   - Named volume for vector storage
+   - Internal service alias `vector`
+   - Healthcheck used by backend startup/retry policy
 
 Generate complete, working configurations and code.
 ```
@@ -1096,8 +1168,19 @@ CREATE:
      - test_process_batch
      - test_process_nonexistent_photo → 404
      - test_processing_status
+     - test_list_export_conflicts
+     - test_resolve_export_conflicts
 
-4. `backend/tests/test_api_auth.py` — Auth tests:
+4. `backend/tests/test_api_search.py` — Search API tests:
+   - test_semantic_search
+   - test_search_reindex
+
+5. `backend/tests/test_api_users_audit.py` — User/Audit API tests:
+   - test_admin_list_users
+   - test_admin_create_update_delete_user
+   - test_audit_log_filtering
+
+6. `backend/tests/test_api_auth.py` — Auth tests:
    - test_login_valid_credentials
    - test_login_invalid_credentials → 401
    - test_protected_endpoint_no_token → 401
@@ -1105,30 +1188,34 @@ CREATE:
    - test_protected_endpoint_valid_token → 200
    - test_refresh_token
 
-5. `frontend/e2e/projects.spec.ts` — Playwright E2E:
+7. `frontend/e2e/projects.spec.ts` — Playwright E2E:
    - test_create_new_project
    - test_view_project_list
    - test_navigate_to_project
    - test_view_source_tree
    - test_select_photo_shows_details
    - test_login_redirect
+   - test_semantic_search
+   - test_users_page_admin_only
+   - test_export_conflict_resolution
 
-6. `docker/docker-compose.prod.yml`:
+8. `docker/docker-compose.prod.yml`:
    - Nginx with TLS (certbot/Let's Encrypt)
    - All services with restart: unless-stopped
    - Health checks for each service
    - Named volumes for persistent data
    - Resource limits (memory, CPU)
    - Environment variables from .env file
+   - Include vector service and storage volume
 
-7. `docker/Dockerfile.backend`:
+9. `docker/Dockerfile.backend`:
    - Python 3.10-slim base
    - Copy bid/ and backend/ packages
    - Install requirements
    - Run: uvicorn api.main:app --host 0.0.0.0 --port 8000
    - Non-root user
 
-8. `docker/Dockerfile.frontend`:
+10. `docker/Dockerfile.frontend`:
    - Node 20-alpine base
    - Multi-stage: build then serve
    - Copy frontend/
@@ -1136,7 +1223,7 @@ CREATE:
    - Run: npm start
    - Non-root user
 
-9. `.github/workflows/ci.yml`:
+11. `.github/workflows/ci.yml`:
    - On: push to main, pull_request
    - Jobs:
      a) Backend tests: Python 3.10, pytest
@@ -1144,7 +1231,7 @@ CREATE:
      c) E2E tests: Playwright (needs both services running)
      d) Docker build: verify images build successfully
 
-10. Update `README.md`:
+12. Update `README.md`:
     - Architecture overview (link to web_architecture.md)
     - Quick start: docker-compose up
     - Development setup: individual service startup
@@ -1165,8 +1252,8 @@ All tests should be runnable with `pytest` (backend) and `npx playwright test` (
 - [ ] `backend/api/main.py`
 - [ ] `backend/api/deps.py`
 - [ ] `backend/api/auth.py`
-- [ ] `backend/api/models/*.py` (5 files)
-- [ ] `backend/api/routers/*.py` (5 files)
+- [ ] `backend/api/models/*.py` (9+ files)
+- [ ] `backend/api/routers/*.py` (9+ files)
 - [ ] `backend/requirements.txt`
 
 ### Phase 2 — WebSocket
@@ -1185,6 +1272,12 @@ All tests should be runnable with `pytest` (backend) and `npx playwright test` (
 - [ ] `frontend/app/(dashboard)/page.tsx`
 - [ ] `frontend/app/(dashboard)/new/page.tsx`
 - [ ] `frontend/app/(dashboard)/projects/[id]/layout.tsx`
+- [ ] `frontend/app/(dashboard)/projects/[id]/search/page.tsx`
+- [ ] `frontend/app/(dashboard)/projects/[id]/collections/page.tsx`
+- [ ] `frontend/app/(dashboard)/projects/[id]/approvals/page.tsx`
+- [ ] `frontend/app/(dashboard)/projects/[id]/publish-packs/page.tsx`
+- [ ] `frontend/app/(dashboard)/projects/[id]/audit/page.tsx`
+- [ ] `frontend/app/(dashboard)/projects/[id]/users/page.tsx`
 - [ ] `frontend/middleware.ts`
 
 ### Phase 4 — Core UI
@@ -1213,7 +1306,7 @@ All tests should be runnable with `pytest` (backend) and `npx playwright test` (
 - [ ] `frontend/components/photo-assignments.tsx`
 
 ### Phase 8 — Testing & Deploy
-- [ ] `backend/tests/test_api_*.py` (4 files)
+- [ ] `backend/tests/test_api_*.py` (6+ files)
 - [ ] `frontend/e2e/*.spec.ts`
 - [ ] `docker/docker-compose.prod.yml`
 - [ ] `docker/Dockerfile.backend`

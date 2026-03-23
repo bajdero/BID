@@ -1,8 +1,8 @@
 # BID Web Architecture — System Design Document
 
-> **Version:** 1.0  
-> **Date:** 2026-03-20  
-> **Stack:** Next.js 14 (React/TypeScript) · FastAPI (Python 3.10+) · FileBrowser · Nginx  
+> **Version:** 1.1  
+> **Date:** 2026-03-23  
+> **Stack:** Next.js 14 (React/TypeScript) · FastAPI (Python 3.10+) · FileBrowser · Nginx · SQLite · Vector Index  
 
 ---
 
@@ -10,8 +10,8 @@
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│                        REVERSE PROXY (Nginx / Caddy)                │
-│                        :443 (HTTPS) / :80 (HTTP)                    │
+│                        REVERSE PROXY (Nginx / Caddy)                 │
+│                        :443 (HTTPS) / :80 (HTTP)                     │
 │                                                                      │
 │   /              → Next.js   (frontend SSR + static assets)          │
 │   /api/*         → FastAPI   (backend REST + WebSocket)              │
@@ -28,7 +28,7 @@
      │ shadcn/ui     │    │ Pydantic v2   │  │   project   │
      └───────────────┘    └───────┬───────┘  └──────┬──────┘
                                   │                  │
-                          ┌───────▼──────────────────▼──────┐
+                          ┌───────▼──────────────────▼───────┐
                           │      SHARED FILESYSTEM VOLUME    │
                           │                                  │
                           │  /data/projects/{name}/          │
@@ -52,7 +52,7 @@
 | **FastAPI** | Business logic API, WebSocket hub | 8000 | 1 (stateful) |
 | **FileBrowser** | Visual file manager for source/export folders | 8080 | 1 |
 
-> **Note:** FastAPI is single-instance because `source_dict` is JSON-file-backed. Horizontal scaling requires a database migration (see § 8 — Upgrade Path).
+> **Note:** Multi-user support is mandatory in v1. User/auth/audit data is persisted in SQLite from day 1; `source_dict` remains file-backed initially.
 
 ---
 
@@ -88,6 +88,10 @@ All endpoints are prefixed with `/api/v1`. Request/response bodies are JSON.
 | `GET` | `/projects/{id}/sources/{folder}/{photo}` | Lookup in `source_dict` | Single photo metadata |
 | `GET` | `/projects/{id}/sources/{folder}/{photo}/preview` | PIL thumbnail generation | Photo preview (resized) |
 | `GET` | `/projects/{id}/sources/{folder}/{photo}/exif` | `source_dict[folder][photo]["exif"]` | EXIF data |
+| `PATCH` | `/projects/{id}/sources/{folder}/{photo}/description` | Update metadata field | Update photo description |
+| `PATCH` | `/projects/{id}/sources/{folder}/{photo}/tags` | Update metadata field | Add/remove tags |
+
+**Identity rule:** Canonical photo identity is content hash only (`hash_id`, e.g., SHA-256). Filenames are treated as mutable attributes.
 
 #### 2.1.3 Processing
 
@@ -97,6 +101,8 @@ All endpoints are prefixed with `/api/v1`. Request/response bodies are JSON.
 | `POST` | `/projects/{id}/process/all` | Batch via ThreadPoolExecutor | Process all NEW photos |
 | `DELETE` | `/projects/{id}/process/{folder}/{photo}` | Reset state to NEW | Re-queue photo |
 | `GET` | `/projects/{id}/process/status` | Read processing queue | Current queue status |
+| `GET` | `/projects/{id}/exports/conflicts` | Query blocked exports | List export conflicts |
+| `POST` | `/projects/{id}/exports/conflicts/resolve` | Admin action handler | Resolve one/many/all conflicts |
 
 #### 2.1.4 Events
 
@@ -116,6 +122,35 @@ All endpoints are prefixed with `/api/v1`. Request/response bodies are JSON.
 |--------|------|-------------|
 | `GET` | `/health` | Liveness check |
 | `GET` | `/version` | API version + BID version |
+| `GET` | `/metrics/queue` | Queue length + worker utilization + error rate |
+
+#### 2.1.6 Search
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/projects/{id}/search/semantic` | Semantic/vector photo search |
+| `POST` | `/projects/{id}/search/reindex` | Rebuild embeddings for descriptions/tags/metadata |
+
+#### 2.1.7 Auth & Users
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/auth/login` | Login and issue tokens |
+| `POST` | `/auth/refresh` | Refresh access token |
+| `GET` | `/users` | Admin list users |
+| `POST` | `/users` | Admin create user |
+| `PUT` | `/users/{id}` | Admin update user role/state |
+| `DELETE` | `/users/{id}` | Admin deactivate/delete user |
+
+#### 2.1.8 Audit & PR Workflow
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/projects/{id}/audit/logs` | Filterable immutable audit stream |
+| `GET` | `/projects/{id}/collections` | List curated collections |
+| `POST` | `/projects/{id}/collections` | Create curated collection |
+| `POST` | `/projects/{id}/approvals` | Update approval state |
+| `POST` | `/projects/{id}/publish-packs` | Schedule social publish pack |
 
 ### 2.2 WebSocket Endpoint
 
@@ -173,6 +208,27 @@ ws:///api/v1/projects/{id}/ws
   "message": "Cannot read EXIF: corrupt header"
 }
 
+// Server → Client: Queue metrics update
+{
+  "type": "queue_metrics",
+  "queue_length": 42,
+  "worker_utilization": {
+    "worker-1": 0.88,
+    "worker-2": 0.63
+  },
+  "error_rate": 0.04
+}
+
+// Server → Client: Export conflict detected
+{
+  "type": "export_conflict",
+  "profile": "fb",
+  "folder": "Session1",
+  "photo": "IMG_0001.tif",
+  "target_path": "export/fb/YAPA2025-03-16_Session1_IMG_0001.jpg",
+  "status": "blocked"
+}
+
 // Client → Server: Subscribe to specific folders (optional)
 {
   "type": "subscribe",
@@ -207,14 +263,19 @@ class ExportProfile(BaseModel):
     logo_required: bool = False
 
 class PhotoEntry(BaseModel):
+    hash_id: str
     path: str
     state: Literal["downloading","new","processing","ok","ok_old","error","export_fail","deleted","skip"]
     exported: dict[str, str]
+    description: str = ""
+    tags: list[str] = []
     size: str
     size_bytes: int
     created: str
     mtime: float
     exif: dict[str, str]
+    quality_score: float | None = None
+    quality_model: Literal["exif_rules", "ml"] | None = None
     error_msg: str | None = None
     duration_sec: float | None = None
     event_folder: str | None = None
@@ -228,6 +289,15 @@ class SourceTree(BaseModel):
 class ProcessRequest(BaseModel):
     photos: list[tuple[str, str]]  # [(folder, photo), ...]
     profiles: list[str] | None = None  # None = all profiles
+
+class SemanticSearchRequest(BaseModel):
+    query: str
+    top_k: int = Field(default=50, ge=1, le=500)
+
+class ConflictResolutionRequest(BaseModel):
+    mode: Literal["single", "selection", "all"]
+    action: Literal["skip", "replace"]
+    items: list[tuple[str, str]] | None = None
 
 class EventSourceCreate(BaseModel):
     location: str  # URL or file path
@@ -258,11 +328,11 @@ class EventResponse(BaseModel):
 
 ```
 ┌──────────┐    REST (JSON)     ┌──────────┐
-│ Next.js  │ ─── HTTP/1.1 ───► │ FastAPI  │
-│ (Client) │ ◄── HTTP/1.1 ──── │ (Server) │
+│ Next.js  │ ─── HTTP/1.1 ───►  │ FastAPI  │
+│ (Client) │ ◄── HTTP/1.1 ────  │ (Server) │
 │          │                    │          │
 │          │    WebSocket       │          │
-│          │ ◄── ws:// ──────► │          │
+│          │ ◄── ws:// ──────►  │          │
 └──────────┘                    └──────────┘
 ```
 
@@ -273,15 +343,15 @@ class EventResponse(BaseModel):
 ### 3.2 Backend → FileBrowser
 
 ```
-┌──────────┐   X-Auth-User hdr   ┌─────────────┐
-│ Nginx    │ ─── HTTP/1.1 ────► │ FileBrowser  │
-│ (Proxy)  │ ◄── HTTP/1.1 ───── │ (Proxy Auth) │
+┌──────────┐   X-Auth-User hdr   ┌──────────────┐
+│ Nginx    │ ─── HTTP/1.1 ────►  │ FileBrowser  │
+│ (Proxy)  │ ◄── HTTP/1.1 ─────  │ (Proxy Auth) │
 └──────────┘                     └──────┬───────┘
                                         │
                                  ┌──────▼───────┐
-                                 │  Shared FS    │
-                                 │  Volume       │
-                                 └───────────────┘
+                                 │  Shared FS   │
+                                 │  Volume      │
+                                 └──────────────┘
 ```
 
 - FileBrowser uses **proxy authentication** (`--auth.method=proxy`).
@@ -303,12 +373,12 @@ Recommended: **Option A** for Phase 1, migrate to Option B if deeper integration
 ### 4.1 Authentication
 
 ```
-┌────────┐  POST /api/v1/auth/login   ┌──────────┐
-│ Client │ ────────────────────────►  │ FastAPI  │
+┌────────┐  POST /api/v1/auth/login    ┌──────────┐
+│ Client │ ────────────────────────►   │ FastAPI  │
 │        │ ◄─ { access_token, ... } ── │          │
 │        │                             │ JWT sign │
 │        │  Authorization: Bearer xxx  │ (HS256)  │
-│        │ ────────────────────────►  │          │
+│        │ ────────────────────────►   │          │
 └────────┘                             └──────────┘
 ```
 
@@ -319,17 +389,19 @@ Recommended: **Option A** for Phase 1, migrate to Option B if deeper integration
 | **Refresh** | `POST /api/v1/auth/refresh` with refresh token cookie |
 | **FileBrowser SSO** | Nginx reads JWT cookie → injects `X-Auth-User` header |
 | **Password hashing** | `bcrypt` (via `passlib`) |
-| **User store** | JSON file initially (`users.json`), SQLite upgrade path |
+| **User store** | SQLite in v1 (multi-user mandatory) |
 
 ### 4.2 Authorization
 
 | Resource | Rule |
 |----------|------|
-| Projects | Owner-only access (single-user initially; RBAC upgrade path) |
+| Projects | Multi-user RBAC in v1 (Photographer, PR, Admin) |
 | Source files | Read via API only; paths validated against project's `source_folder` |
 | Export files | Read-only via API; write only through processing pipeline |
 | FileBrowser | Scoped to project root; per-user isolation via `--scope` flag |
 | Admin endpoints | Protected by admin role claim in JWT |
+| Description/tag API | Editable in UI + external API (permission-guarded) |
+| PR workflows | PR + Admin can manage collections/approvals/publish packs by policy |
 
 ### 4.3 CORS Configuration
 
@@ -357,7 +429,7 @@ app.add_middleware(
 | **XSS** | React auto-escapes; `Content-Security-Policy` headers set by Nginx |
 | **CSRF** | `SameSite=Strict` cookies + CORS origin check |
 | **DoS on processing** | Rate limit: max 5 concurrent `process_photo_task` calls via semaphore |
-| **File upload** | Handled by FileBrowser (validated file types); API does not accept uploads |
+| **File upload** | Handled by FileBrowser with server-side extension/MIME allowlist; API does not accept uploads |
 | **EXIF injection** | EXIF values rendered as text-only in frontend; no `dangerouslySetInnerHTML` |
 | **Symlink attacks** | `os.path.realpath()` + containment check before any file operation |
 
@@ -427,6 +499,11 @@ User opens project "Concert_2026"
 ```
 
 For multiple root directories, use FileBrowser's `--scope` flag or configure per-user rules in FileBrowser's database.
+
+Project scoping is role-aware in v1:
+- Photographer: own uploads by default, with explicit shared-project permissions.
+- PR Team Member: read/write metadata access on assigned projects.
+- Admin: full project scope and conflict-resolution controls.
 
 ### 5.4 Integration Points
 
@@ -583,8 +660,10 @@ async def watch_source_folder(project_path: Path, ws_manager: WebSocketManager):
 | **Framework** | Next.js 14+ (App Router) | SSR for initial load; API routes as BFF; image optimization |
 | **Language** | TypeScript 5+ | Type safety across API boundary; matches Pydantic models |
 | **State** | TanStack Query v5 | Server-state caching, auto-refetch, WebSocket integration |
+| **i18n** | next-intl (EN/PL) | Day-1 multilingual UI support |
 | **UI Components** | shadcn/ui + Radix | Headless, accessible, customizable; no heavy runtime |
 | **Styling** | Tailwind CSS 3+ | Utility-first; fast iteration; consistent design system |
+| **Search** | pgvector or Qdrant client | Semantic/vector retrieval |
 | **Image viewer** | react-photo-album + lightbox | Gallery grid + fullscreen preview; replaces `PrevWindow` |
 | **Tree view** | Custom or @tanstack/virtual | Virtualized file tree for large source dicts; replaces `SourceTree` |
 | **Forms** | React Hook Form + Zod | Validation mirrors Pydantic schemas; type-safe |
@@ -608,7 +687,13 @@ app/
 │       ├── processing/page.tsx       # Processing dashboard + progress
 │       ├── events/page.tsx           # Event management (replaces EventsWindow)
 │       ├── export-profiles/page.tsx  # Profile editor (replaces ExportWizard)
+│       ├── search/page.tsx           # Semantic search
+│       ├── collections/page.tsx      # PR curated collections
+│       ├── approvals/page.tsx        # PR/Admin approval workflow
+│       ├── publish-packs/page.tsx    # Scheduled social publish packs
 │       ├── files/page.tsx            # FileBrowser iframe embed
+│       ├── audit/page.tsx            # Immutable audit log viewer
+│       ├── users/page.tsx            # Admin user management
 │       └── settings/page.tsx         # Project settings editor
 ├── api/                              # BFF proxy routes (optional)
 │   └── [...proxy]/route.ts
@@ -637,12 +722,12 @@ app/
 
 ### 8.1 Database Migration (Future)
 
-When `source_dict.json` exceeds ~10K entries or multi-user access is needed:
+User/auth/audit are already database-backed in v1. The remaining migration focus is photo metadata/indexing scale:
 
 ```
-Phase 1 (current):  JSON files on disk
-Phase 2:            SQLite (single-file, no server needed)
-Phase 3:            PostgreSQL (multi-user, full ACID)
+Phase 1 (current):  Hybrid (SQLite + JSON source_dict)
+Phase 2:            Full SQLite (source metadata moved from JSON)
+Phase 3:            PostgreSQL (high-scale multi-user ACID)
 ```
 
 The API layer abstracts persistence — frontend code does not change.
@@ -695,7 +780,14 @@ services:
     environment:
       - BID_DATA_DIR=/data
       - JWT_SECRET=${JWT_SECRET}
+      - VECTOR_INDEX_URL=http://vector:6333
     expose: ["8000"]
+
+  vector:
+    image: qdrant/qdrant:latest
+    volumes:
+      - qdrant_data:/qdrant/storage
+    expose: ["6333"]
 
   filebrowser:
     image: filebrowser/filebrowser:v2
@@ -706,6 +798,8 @@ services:
 
 volumes:
   bid_data:
+    driver: local
+  qdrant_data:
     driver: local
 ```
 
