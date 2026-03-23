@@ -10,22 +10,14 @@ Design rules (from web_architecture.md §2.1.2):
 """
 from __future__ import annotations
 
-from sqlalchemy import create_engine
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from src.api.config import settings
+from src.api.db.adapter import make_adapter
 
 
-def _make_engine(url: str):
-    """Create a SQLAlchemy engine with driver-specific options."""
-    kwargs: dict = {}
-    if url.startswith("sqlite"):
-        # SQLite needs check_same_thread=False for multi-threaded FastAPI workers.
-        kwargs["connect_args"] = {"check_same_thread": False}
-    return create_engine(url, **kwargs)
-
-
-engine = _make_engine(str(settings.DATABASE_URL))
+_adapter = make_adapter(str(settings.DATABASE_URL))
+engine = _adapter.create_engine()
 
 SessionLocal: sessionmaker[Session] = sessionmaker(
     autocommit=False,
