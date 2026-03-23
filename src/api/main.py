@@ -19,13 +19,14 @@ from __future__ import annotations
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from src.api.config import settings
+from src.api.deps import require_authenticated_user
 from src.api.errors import register_exception_handlers
 from src.api.models.database import init_db
-from src.api.routers import exports, processing, system
+from src.api.routers import auth, exports, processing, projects, system, users
 from src.api.services.processing import ProcessingService, set_service, get_service
 
 logger = logging.getLogger("BID.api")
@@ -60,6 +61,33 @@ OPENAPI_TAGS: list[dict] = [
             "Lists photos whose expected output file is missing or zero-byte "
             "(*blocked exports*) and provides a bulk-resolve action to either "
             "re-queue (`replace`) or permanently skip (`skip`) conflicting entries."
+        ),
+    },
+    {
+        "name": "projects",
+        "description": (
+            "Project directory CRUD, settings management, and export-profile "
+            "configuration.  "
+            "Projects are on-disk directories under `PROJECTS_DIR`; each contains "
+            "`settings.json` (source/export folder paths) and `export_option.json` "
+            "(profile definitions).  "
+            "Also exposes the immutable per-project audit-log stream."
+        ),
+    },
+    {
+        "name": "auth",
+        "description": (
+            "JWT-based authentication.  "
+            "POST `/auth/login` with username + password to receive an access token "
+            "(30 min, default) and a refresh token (7 days, default).  "
+            "Pass the access token as `Authorization: Bearer <token>`."
+        ),
+    },
+    {
+        "name": "users",
+        "description": (
+            "User account management — **admin role required**.  "
+            "Supports create, list, update (role/state/email), and delete operations."
         ),
     },
 ]
@@ -110,7 +138,9 @@ def create_app() -> FastAPI:
             "| 3 | React/TypeScript frontend | Planned |\n"
             "| 4 | Event system | Planned |\n\n"
             "## Auth\n"
-            "Phase 1 has no auth layer.  JWT/OAuth2 will be added in P1-04.\n\n"
+            "Protected endpoints require `Authorization: Bearer <access_token>`.  "
+            "Obtain tokens via `POST /api/v1/auth/login`.  "
+            "Admin-only endpoints additionally require the `admin` role.\n\n"
             "## Errors\n"
             "All error responses use the `ErrorResponse` schema: "
             "`{ \"detail\": \"...\", \"field\": \"...\" }`."
@@ -147,8 +177,23 @@ def create_app() -> FastAPI:
     # ---- Routers (all under /api/v1) ----------------------------------------
     prefix = "/api/v1"
     app.include_router(system.router, prefix=prefix)
-    app.include_router(processing.router, prefix=prefix)
-    app.include_router(exports.router, prefix=prefix)
+    app.include_router(auth.router, prefix=prefix)
+    app.include_router(users.router, prefix=prefix)
+    app.include_router(
+        processing.router,
+        prefix=prefix,
+        dependencies=[Depends(require_authenticated_user)],
+    )
+    app.include_router(
+        exports.router,
+        prefix=prefix,
+        dependencies=[Depends(require_authenticated_user)],
+    )
+    app.include_router(
+        projects.router,
+        prefix=prefix,
+        dependencies=[Depends(require_authenticated_user)],
+    )
 
     return app
 

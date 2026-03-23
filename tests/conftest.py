@@ -305,9 +305,16 @@ def api_test_app(tmp_path, sample_api_project):
     from sqlalchemy.pool import StaticPool
 
     from src.api.config import settings as app_settings
-    from src.api.deps import get_db, get_processing_service, get_project_path
+    from src.api.deps import (
+        get_db,
+        get_processing_service,
+        get_project_path,
+        require_admin,
+        require_authenticated_user,
+    )
     from src.api.main import create_app
     from src.api.models.database import Base
+    from src.api.models.user import UserRecord
     from src.api.services.processing import ProcessingService
 
     import src.api.models.database as _db_mod
@@ -356,11 +363,35 @@ def api_test_app(tmp_path, sample_api_project):
             raise HTTPException(status_code=404, detail=f"Project '{project_id}' not found.")
         return p
 
+    # Point project resolution to the temporary projects root.
+    _orig_projects_dir = app_settings.PROJECTS_DIR
+    app_settings.PROJECTS_DIR = sample_api_project.parent
+
     # ── Build app wired to the test in-memory database ────────────────────────
     app = create_app()
     app.dependency_overrides[get_db] = override_get_db
     app.dependency_overrides[get_processing_service] = override_get_processing_service
     app.dependency_overrides[get_project_path] = override_get_project_path
+
+    # Auth guard overrides: most API integration tests are not auth-focused,
+    # so we inject a fixed admin user to keep test setup lightweight.
+    test_user = UserRecord(
+        id=1,
+        username="test_admin",
+        email="admin@test.local",
+        hashed_password="x",
+        role="admin",
+        is_active=True,
+    )
+
+    def override_require_authenticated_user():
+        return test_user
+
+    def override_require_admin():
+        return test_user
+
+    app.dependency_overrides[require_authenticated_user] = override_require_authenticated_user
+    app.dependency_overrides[require_admin] = override_require_admin
 
     yield app
 
@@ -370,3 +401,4 @@ def api_test_app(tmp_path, sample_api_project):
     # Restore original module-level DB objects
     _db_mod.engine = _orig_engine
     _db_mod.SessionLocal = _orig_session
+    app_settings.PROJECTS_DIR = _orig_projects_dir
