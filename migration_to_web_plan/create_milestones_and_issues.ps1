@@ -130,10 +130,46 @@ function New-IssueIfMissing {
 }
 
 New-IssueIfMissing `
-  -Title "Epic: Phase 1 - Backend API Extraction" `
+  -Title "[Epic] Phase 1 - Backend API Extraction" `
   -Milestone "M1 - Backend API Extraction (Phase 1)" `
-  -Labels @("type:epic", "priority:p1", "area:backend") `
+  -Labels @("type:epic", "priority:p0", "area:backend") `
   -Body (New-StandardBody -Problem "Expose existing BID logic via FastAPI without modifying core bid package." -ScopeIn "API app, models, routers, deps, auth baseline." -ScopeOut "Core business logic rewrite." -Dependencies "Milestone M1")
+
+New-IssueIfMissing `
+  -Title "P1-01 Design REST API specification (OpenAPI 3.0) for BID operations" `
+  -Milestone "M1 - Backend API Extraction (Phase 1)" `
+  -Labels @("type:task", "area:backend", "priority:p1") `
+  -Body (New-StandardBody -Problem "Define OpenAPI contract for BID backend operations." -ScopeIn "Processing, exports, project/session and system endpoints contract." -ScopeOut "Implementation of endpoint handlers." -Dependencies "[Epic] Phase 1 - Backend API Extraction")
+
+New-IssueIfMissing `
+  -Title "P1-02 Extract image processing pipeline to FastAPI service" `
+  -Milestone "M1 - Backend API Extraction (Phase 1)" `
+  -Labels @("type:feature", "area:backend", "priority:p0") `
+  -Body (New-StandardBody -Problem "Expose image processing pipeline through FastAPI while reusing existing core logic." -ScopeIn "Processing service, processing/export endpoints, API wiring." -ScopeOut "Project/session management and auth." -Dependencies "[Epic] Phase 1 - Backend API Extraction")
+
+New-IssueIfMissing `
+  -Title "P1-03 Implement project and session management API endpoints" `
+  -Milestone "M1 - Backend API Extraction (Phase 1)" `
+  -Labels @("type:feature", "area:backend", "priority:p0") `
+  -Body (New-StandardBody -Problem "Provide project/session API parity with desktop behavior." -ScopeIn "Project and session CRUD endpoints." -ScopeOut "Auth and DB abstraction." -Dependencies "[Epic] Phase 1 - Backend API Extraction")
+
+New-IssueIfMissing `
+  -Title "P1-04 Add JWT authentication and authorisation middleware" `
+  -Milestone "M1 - Backend API Extraction (Phase 1)" `
+  -Labels @("type:feature", "area:backend", "priority:p1") `
+  -Body (New-StandardBody -Problem "Protect API endpoints with JWT-based authentication and authorization." -ScopeIn "Token validation, auth middleware, endpoint guards." -ScopeOut "Role UX and frontend auth screens." -Dependencies "P1-03")
+
+New-IssueIfMissing `
+  -Title "P1-05 Create database abstraction layer (SQLite -> PostgreSQL)" `
+  -Milestone "M1 - Backend API Extraction (Phase 1)" `
+  -Labels @("type:infra", "area:backend", "priority:p1") `
+  -Body (New-StandardBody -Problem "Keep SQLite-first persistence with clear PostgreSQL migration path." -ScopeIn "Persistence abstraction, adapter boundaries, migration readiness." -ScopeOut "Production PostgreSQL deployment." -Dependencies "P1-03")
+
+New-IssueIfMissing `
+  -Title "P1-06 Write unit tests for all API endpoints (>= 80% coverage)" `
+  -Milestone "M1 - Backend API Extraction (Phase 1)" `
+  -Labels @("type:test", "area:backend", "priority:p1") `
+  -Body (New-StandardBody -Problem "Establish API test coverage for Phase 1 endpoints." -ScopeIn "Unit/integration tests for API endpoints and service wiring." -ScopeOut "Frontend and WebSocket test suites." -Dependencies "P1-01, P1-02, P1-03, P1-04, P1-05")
 
 New-IssueIfMissing `
   -Title "Epic: Phase 2 - WebSocket Real-Time Layer" `
