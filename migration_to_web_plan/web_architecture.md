@@ -1,6 +1,6 @@
 # BID Web Architecture — System Design Document
 
-> **Version:** 1.1  
+> **Version:** 1.2  
 > **Date:** 2026-03-23  
 > **Stack:** Next.js 14 (React/TypeScript) · FastAPI (Python 3.10+) · FileBrowser · Nginx · SQLite · Vector Index  
 
@@ -23,7 +23,7 @@
      │   :3000       │    │   :8000       │  │   :8080     │
      │               │    │               │  │             │
      │ React 18+     │    │ bid/ package  │  │ Go binary   │
-     │ TanStack Query│    │ ThreadPool    │  │ Auth: proxy │
+    │ TanStack Query│    │ ARQ queue     │  │ Auth: proxy │
      │ Tailwind CSS  │    │ WebSocket     │  │ Scope: per  │
      │ shadcn/ui     │    │ Pydantic v2   │  │   project   │
      └───────────────┘    └───────┬───────┘  └──────┬──────┘
@@ -34,8 +34,8 @@
                           │  /data/projects/{name}/          │
                           │    ├── settings.json             │
                           │    ├── export_option.json        │
-                          │    ├── source_dict.json          │
-                          │    └── event_sources.json        │
+                          │    ├── event_sources.json        │
+                          │    └── bid.sqlite3               │
                           │                                  │
                           │  /data/source/   (photo sources) │
                           │  /data/export/   (processed out) │
@@ -52,7 +52,7 @@
 | **FastAPI** | Business logic API, WebSocket hub | 8000 | 1 (stateful) |
 | **FileBrowser** | Visual file manager for source/export folders | 8080 | 1 |
 
-> **Note:** Multi-user support is mandatory in v1. User/auth/audit data is persisted in SQLite from day 1; `source_dict` remains file-backed initially.
+> **Note:** Multi-user support is mandatory in v1. User/auth/audit/source metadata are persisted in SQLite from day 1, using relative paths resolved at runtime.
 
 ---
 
@@ -80,14 +80,14 @@ All endpoints are prefixed with `/api/v1`. Request/response bodies are JSON.
 
 | Method | Path | Maps To | Description |
 |--------|------|---------|-------------|
-| `GET` | `/projects/{id}/sources` | `source_manager.load_source_dict()` | Full source dictionary |
-| `GET` | `/projects/{id}/sources/tree` | Derived from `source_dict` | Folder/file tree structure |
-| `POST` | `/projects/{id}/sources/scan` | `source_manager.create_source_dict()` | Full initial scan |
-| `POST` | `/projects/{id}/sources/update` | `source_manager.update_source_dict()` | Incremental update |
+| `GET` | `/projects/{id}/sources` | Source repository service | Full source index (SQLite-backed) |
+| `GET` | `/projects/{id}/sources/tree` | Derived from source index | Processing-state folder/file structure |
+| `POST` | `/projects/{id}/sources/scan` | Source scanner service | Full initial scan and index build |
+| `POST` | `/projects/{id}/sources/update` | Source scanner service | Incremental update and reconciliation |
 | `POST` | `/projects/{id}/sources/integrity` | `source_manager.check_integrity()` | Integrity check |
-| `GET` | `/projects/{id}/sources/{folder}/{photo}` | Lookup in `source_dict` | Single photo metadata |
+| `GET` | `/projects/{id}/sources/{folder}/{photo}` | Lookup in source index | Single photo metadata |
 | `GET` | `/projects/{id}/sources/{folder}/{photo}/preview` | PIL thumbnail generation | Photo preview (resized) |
-| `GET` | `/projects/{id}/sources/{folder}/{photo}/exif` | `source_dict[folder][photo]["exif"]` | EXIF data |
+| `GET` | `/projects/{id}/sources/{folder}/{photo}/exif` | Lookup EXIF from metadata store | EXIF data |
 | `PATCH` | `/projects/{id}/sources/{folder}/{photo}/description` | Update metadata field | Update photo description |
 | `PATCH` | `/projects/{id}/sources/{folder}/{photo}/tags` | Update metadata field | Add/remove tags |
 
@@ -98,7 +98,7 @@ All endpoints are prefixed with `/api/v1`. Request/response bodies are JSON.
 | Method | Path | Maps To | Description |
 |--------|------|---------|-------------|
 | `POST` | `/projects/{id}/process` | `image_processing.process_photo_task()` | Process selected photos |
-| `POST` | `/projects/{id}/process/all` | Batch via ThreadPoolExecutor | Process all NEW photos |
+| `POST` | `/projects/{id}/process/all` | Enqueue batch in ARQ worker queue | Process all NEW photos |
 | `DELETE` | `/projects/{id}/process/{folder}/{photo}` | Reset state to NEW | Re-queue photo |
 | `GET` | `/projects/{id}/process/status` | Read processing queue | Current queue status |
 | `GET` | `/projects/{id}/exports/conflicts` | Query blocked exports | List export conflicts |
@@ -115,6 +115,8 @@ All endpoints are prefixed with `/api/v1`. Request/response bodies are JSON.
 | `GET` | `/projects/{id}/events/schedules` | `EventManager.schedules` | Active schedules |
 | `POST` | `/projects/{id}/events/annotate` | `EventManager.annotate()` | Annotate source_dict |
 | `GET` | `/projects/{id}/events/folder-map` | `EventManager.folder_map` | Event-to-folder mapping |
+
+Default event refresh cadence is 5 minutes, with manual reload available in UI.
 
 #### 2.1.5 System
 
@@ -425,7 +427,7 @@ app.add_middleware(
 | Threat | Mitigation |
 |--------|-----------|
 | **Path traversal** | All file paths resolved and validated against project's allowed directories using `Path.resolve()` + `is_relative_to()` check |
-| **Injection** | Pydantic models validate all inputs; no dynamic SQL (JSON file-backed) |
+| **Injection** | Pydantic models validate all inputs; parameterized SQLAlchemy queries only |
 | **XSS** | React auto-escapes; `Content-Security-Policy` headers set by Nginx |
 | **CSRF** | `SameSite=Strict` cookies + CORS origin check |
 | **DoS on processing** | Rate limit: max 5 concurrent `process_photo_task` calls via semaphore |
@@ -435,7 +437,7 @@ app.add_middleware(
 
 ### 4.5 Transport Security
 
-- **TLS:** Nginx terminates HTTPS (Let's Encrypt / custom cert).
+- **TLS:** Nginx terminates HTTPS (self-signed in initial deployment, configurable for Let's Encrypt).
 - **Internal traffic:** HTTP between services on Docker network (not exposed).
 - **Headers:** `Strict-Transport-Security`, `X-Content-Type-Options: nosniff`, `X-Frame-Options: SAMEORIGIN`.
 
@@ -500,7 +502,7 @@ User opens project "Concert_2026"
 
 For multiple root directories, use FileBrowser's `--scope` flag or configure per-user rules in FileBrowser's database.
 
-Project scoping is role-aware in v1:
+Project scoping is role-aware in v1, with one active project instance at a time:
 - Photographer: own uploads by default, with explicit shared-project permissions.
 - PR Team Member: read/write metadata access on assigned projects.
 - Admin: full project scope and conflict-resolution controls.
@@ -509,9 +511,9 @@ Project scoping is role-aware in v1:
 
 | Feature | How |
 |---------|-----|
-| **Browse source photos** | FileBrowser scoped to project's `source_folder` |
+| **Browse source photos** | FileBrowser scoped to project's `source_folder` (primary file-management UI) |
 | **Browse exports** | FileBrowser tab/link scoped to project's `export_folder` |
-| **Upload new photos** | FileBrowser upload → triggers `update_source_dict()` via webhook or filesystem watcher |
+| **Upload new photos** | FileBrowser upload → triggers source index refresh via webhook or filesystem watcher |
 | **Download exports** | FileBrowser native download (zip support built-in) |
 | **Delete files** | FileBrowser delete → integrity check detects `DELETED` state |
 
@@ -550,13 +552,13 @@ async def watch_source_folder(project_path: Path, ws_manager: WebSocketManager):
                         │   FastAPI       │
                         │   Router        │
                         └────────┬────────┘
-                                 │ Submit to ThreadPoolExecutor
+                                 │ Enqueue to ARQ queue
                                  ▼
            ┌─────────────────────────────────────────┐
-           │            ThreadPoolExecutor            │
-           │         (max_workers=3, reused)          │
+           │                ARQ Queue                 │
+           │      (default concurrency=1, RAM-aware)  │
            ├────────────┬───────────┬────────────────┤
-           │  Worker 1  │ Worker 2  │   Worker 3     │
+           │  Worker 1  │ Worker 2  │   Worker N     │
            │            │           │                │
            │ process_   │ process_  │  process_      │
            │ photo_task │ photo_task│  photo_task    │
@@ -599,14 +601,15 @@ async def watch_source_folder(project_path: Path, ws_manager: WebSocketManager):
                               │                     │
                               ▼                     ▼
                     ┌──────────────────────────────────────┐
-                    │         source_dict (in-memory)       │
-                    │         + save to source_dict.json    │
+                    │     SQLite source index + audit log   │
+                    │   (relative paths, runtime resolution)│
                     └──────────────────┬───────────────────┘
                                        │ ws push
                                        ▼
                               ┌─────────────────┐
                               │  Client UI      │
-                              │  Source Tree     │
+                              │  FileBrowser +   │
+                              │  state panels    │
                               │  (live updates)  │
                               └─────────────────┘
 ```
@@ -665,7 +668,7 @@ async def watch_source_folder(project_path: Path, ws_manager: WebSocketManager):
 | **Styling** | Tailwind CSS 3+ | Utility-first; fast iteration; consistent design system |
 | **Search** | pgvector or Qdrant client | Semantic/vector retrieval |
 | **Image viewer** | react-photo-album + lightbox | Gallery grid + fullscreen preview; replaces `PrevWindow` |
-| **Tree view** | Custom or @tanstack/virtual | Virtualized file tree for large source dicts; replaces `SourceTree` |
+| **State panel** | Custom or @tanstack/virtual | Virtualized processing-state list; file operations delegated to FileBrowser |
 | **Forms** | React Hook Form + Zod | Validation mirrors Pydantic schemas; type-safe |
 | **WebSocket** | Native WebSocket + TanStack Query | Real-time updates invalidate query cache |
 | **Icons** | Lucide React | Consistent icon set, tree-shakeable |
@@ -683,7 +686,7 @@ app/
 │   ├── new/page.tsx                  # Setup wizard (replaces SetupWizard)
 │   └── projects/[id]/
 │       ├── layout.tsx                # Project shell (settings in sidebar)
-│       ├── page.tsx                  # Source tree + details panel
+│       ├── page.tsx                  # Processing state panel + details
 │       ├── processing/page.tsx       # Processing dashboard + progress
 │       ├── events/page.tsx           # Event management (replaces EventsWindow)
 │       ├── export-profiles/page.tsx  # Profile editor (replaces ExportWizard)
@@ -707,14 +710,14 @@ app/
 | `MainApp` (app.py) | `layout.tsx` + React context | State management via TanStack Query |
 | `ProjectSelector` | `/(dashboard)/page.tsx` | Card grid with recent projects |
 | `SetupWizard` | `/(dashboard)/new/page.tsx` | Multi-step form (React Hook Form) |
-| `SourceTree` | `<SourceTree />` component | Virtualized tree with state icons |
+| `SourceTree` | Processing state panel + FileBrowser integration | FileBrowser handles file operations; panel focuses on processing state |
 | `DetailsPanel` | `<DetailsPanel />` component | EXIF table + export status badges |
 | `PrevWindow` (×2) | `<ImagePreview />` component | Side-by-side source/export comparison |
 | `EventsWindow` | `/projects/[id]/events/page.tsx` | Schedule timeline + source management |
 | `ExportWizard` | `/projects/[id]/export-profiles/page.tsx` | Profile form with live preview |
 | `Toast` | `sonner` or `shadcn/ui toast` | Bottom-right notification stack |
 | Tk `after()` polling | WebSocket + TanStack Query invalidation | Real-time updates |
-| `ThreadPoolExecutor` status | Progress bars + status badges | Fed by WebSocket `progress` events |
+| `ARQ queue` status | Progress bars + status badges | Fed by WebSocket `progress` events |
 
 ---
 
@@ -722,11 +725,11 @@ app/
 
 ### 8.1 Database Migration (Future)
 
-User/auth/audit are already database-backed in v1. The remaining migration focus is photo metadata/indexing scale:
+User/auth/audit/source metadata are already database-backed in v1:
 
 ```
-Phase 1 (current):  Hybrid (SQLite + JSON source_dict)
-Phase 2:            Full SQLite (source metadata moved from JSON)
+Phase 1 (current):  Full SQLite (users, auth, audit, source metadata)
+Phase 2:            SQLite optimization (indexes, partition strategy, retention)
 Phase 3:            PostgreSQL (high-scale multi-user ACID)
 ```
 
@@ -735,8 +738,8 @@ The API layer abstracts persistence — frontend code does not change.
 ### 8.2 Processing at Scale
 
 ```
-Phase 1 (current):  ThreadPoolExecutor (in-process, 3 workers)
-Phase 2:            Celery + Redis (distributed, job persistence)
+Phase 1 (current):  ARQ queue (default worker concurrency=1, configurable)
+Phase 2:            Multi-worker ARQ + Redis persistence + retry policy
 Phase 3:            Kubernetes Jobs (auto-scaling, cloud-native)
 ```
 
@@ -745,9 +748,9 @@ Phase 3:            Kubernetes Jobs (auto-scaling, cloud-native)
 | Cache | Technology | What |
 |-------|-----------|------|
 | **Thumbnail** | Filesystem (`/data/.cache/thumbs/`) | Pre-generated previews |
-| **API response** | TanStack Query (client-side) | `source_dict`, settings |
+| **API response** | TanStack Query (client-side) | source index, settings |
 | **Static assets** | Nginx `proxy_cache` | Next.js pages, JS bundles |
-| **EXIF data** | In-memory (source_dict) | Already cached in JSON |
+| **EXIF data** | SQLite + optional memory cache | Persisted and queryable metadata |
 
 ---
 
@@ -814,9 +817,20 @@ For NAS or local workstation deployment without Docker:
 
 ---
 
-## 10. Error Handling Strategy
+## 10. Delivery Governance
 
-### 10.1 Exception → HTTP Status Mapping
+AI agents working from this architecture must post progress to the exact issue IDs defined in `migration_to_web_plan/github_milestones_and_issues_plan.md`.
+
+- Every workstream maps to one epic ID (`E1`..`E12`) and one child issue ID (`P*`, `POC-*`, `AUD-*`, `REL-*`, `G*`).
+- Each progress update includes milestone ID (`M1`..`M13`), status, and completion percentage.
+- Cross-cutting work must list related issue IDs to keep milestone traceability explicit.
+- Freeze-sensitive blockers must reference relevant gate issue (`G1`, `G2`, or `G3`).
+
+---
+
+## 11. Error Handling Strategy
+
+### 11.1 Exception → HTTP Status Mapping
 
 | Exception (bid/errors.py) | HTTP Status | Response Body |
 |---------------------------|-------------|---------------|
@@ -828,7 +842,7 @@ For NAS or local workstation deployment without Docker:
 | `FileNotFoundError` | `404 Not Found` | `{"detail": "File not found"}` |
 | `PermissionError` | `403 Forbidden` | `{"detail": "Access denied"}` |
 
-### 10.2 WebSocket Error Handling
+### 11.2 WebSocket Error Handling
 
 - Connection drops: Client auto-reconnects with exponential backoff (1s, 2s, 4s, max 30s).
 - Server errors during processing: Sent as `{"type": "error"}` messages, never crash the WebSocket.
