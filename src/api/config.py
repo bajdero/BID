@@ -49,6 +49,17 @@ class Settings(BaseSettings):
     API_VERSION: str = Field(default="1.0.0", description="SemVer for this API build.")
     BID_VERSION: str = Field(default="2.0.0-dev", description="BID product version.")
 
+    # -------------------------------------------------------------------- Auth
+    SECRET_KEY: str = Field(
+        default="change-me-in-production-use-a-long-random-string",
+        description="HMAC secret key for signing JWT tokens.  Override via SECRET_KEY env var.",
+    )
+    JWT_ALGORITHM: str = Field(default="HS256", description="JWT signing algorithm.")
+    # Access token lifetime (seconds); default 30 minutes.
+    ACCESS_TOKEN_EXPIRE_SECONDS: int = Field(default=1800, ge=60)
+    # Refresh token lifetime (seconds); default 7 days.
+    REFRESH_TOKEN_EXPIRE_SECONDS: int = Field(default=604800, ge=60)
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

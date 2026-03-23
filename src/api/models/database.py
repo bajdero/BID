@@ -41,6 +41,6 @@ class Base(DeclarativeBase):
 def init_db() -> None:
     """Create all tables declared under Base.  Called once during app lifespan startup."""
     # Import models so their table definitions are registered on Base.metadata.
-    from src.api.models import audit, source  # noqa: F401
+    from src.api.models import audit, source, user  # noqa: F401
 
     Base.metadata.create_all(bind=engine)
