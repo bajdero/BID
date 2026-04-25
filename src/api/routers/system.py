@@ -38,7 +38,7 @@ async def version() -> VersionResponse:
     response_model=QueueMetricsResponse,
     summary="Processing-queue operational metrics",
 )
-def queue_metrics(
+async def queue_metrics(
     svc: ProcessingService = Depends(get_processing_service),
 ) -> QueueMetricsResponse:
     """

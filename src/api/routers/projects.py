@@ -56,10 +56,11 @@ router = APIRouter(prefix="/projects", tags=["projects"])
     responses=_ERR,
 )
 def list_projects(
+    db: Session = Depends(get_db),
     svc: ProjectService = Depends(get_project_service),
 ) -> list[ProjectInfo]:
     """Return a summary record for every project directory in PROJECTS_DIR."""
-    return svc.list_projects()
+    return svc.list_projects(db)
 
 
 @router.post(
@@ -71,6 +72,7 @@ def list_projects(
 )
 def create_project(
     body: ProjectCreate,
+    db: Session = Depends(get_db),
     svc: ProjectService = Depends(get_project_service),
 ) -> ProjectInfo:
     """
@@ -81,7 +83,7 @@ def create_project(
     same normalised name already exists.
     """
     try:
-        return svc.create_project(body)
+        return svc.create_project(body, db)
     except FileExistsError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
@@ -100,10 +102,11 @@ def create_project(
 def get_project(
     project_id: str,
     project_path: Path = Depends(get_project_path),
+    db: Session = Depends(get_db),
     svc: ProjectService = Depends(get_project_service),
 ) -> ProjectInfo:
     """Return full details for a single project."""
-    return svc.get_project(project_id)
+    return svc.get_project(project_id, db)
 
 
 @router.delete(

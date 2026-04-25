@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 from bid.config import load_settings
 from src.api.models.audit import AuditLog
 from src.api.models.source import PhotoRecord
+from src.api.path_utils import PathTraversalError, resolve_within
 from src.api.schemas.common import ConflictItem, ConflictResolutionRequest
 from src.api.schemas.source import PhotoEntry, SourceTree
 
@@ -191,13 +192,20 @@ class SourceService:
         self, db: Session, project_id: str, project_path: Path
     ) -> list[ConflictItem]:
         """
-        Return photos whose state is 'export_fail' or whose exported files
-        are missing / zero-byte on disk.
+        Return photos that are in a conflict state:
+
+        - Records whose state is 'ok' or 'export_fail' with non-empty ``exported``
+          whose output files are missing or zero-byte on disk.
+        - Records whose state is 'export_fail' with an empty ``exported`` mapping
+          (processing failed before producing any output).
         """
         settings_data = load_settings(project_path / "settings.json")
         export_folder = Path(settings_data["export_folder"])
 
-        records = (
+        conflicts: list[ConflictItem] = []
+
+        # ── Query 1: check for missing/zero-byte exported files ──────────────
+        records_with_exports = (
             db.query(PhotoRecord)
             .filter(
                 PhotoRecord.project_id == project_id,
@@ -205,11 +213,17 @@ class SourceService:
             )
             .all()
         )
-
-        conflicts: list[ConflictItem] = []
-        for record in records:
+        for record in records_with_exports:
             for profile, rel_path in record.exported.items():
-                abs_path = export_folder / rel_path
+                try:
+                    abs_path = resolve_within(export_folder, rel_path)
+                except PathTraversalError:
+                    logger.warning(
+                        f"[CONFLICT] Skipping corrupt exported path "
+                        f"{rel_path!r} for {record.folder}/{record.filename}: "
+                        f"path escapes export_folder."
+                    )
+                    continue
                 if not abs_path.exists() or abs_path.stat().st_size == 0:
                     conflicts.append(
                         ConflictItem(
@@ -220,6 +234,28 @@ class SourceService:
                             reason="missing_or_empty",
                         )
                     )
+
+        # ── Query 2: export_fail records with no output at all ───────────────
+        failed_no_output = (
+            db.query(PhotoRecord)
+            .filter(
+                PhotoRecord.project_id == project_id,
+                PhotoRecord.state == "export_fail",
+            )
+            .all()
+        )
+        for record in failed_no_output:
+            if not record.exported:
+                conflicts.append(
+                    ConflictItem(
+                        profile="",
+                        folder=record.folder,
+                        photo=record.filename,
+                        target_path="",
+                        reason="export_failed_no_output",
+                    )
+                )
+
         return conflicts
 
     def resolve_conflicts(

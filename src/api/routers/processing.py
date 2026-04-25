@@ -134,7 +134,7 @@ async def reset_photo(
     summary="Current processing-queue status",
     responses={404: {"model": ErrorResponse, "description": "Project not found."}},
 )
-def get_process_status(
+async def get_process_status(
     project_id: str,
     project_path: Path = Depends(get_project_path),
     svc: ProcessingService = Depends(get_processing_service),

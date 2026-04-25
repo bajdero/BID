@@ -110,8 +110,8 @@ class TestMakeRelativeExports:
         export_folder = tmp_path / "export"
         other = tmp_path / "other" / "img.jpg"
         rel = _make_relative_exports({"fb": str(other)}, export_folder)
-        # Stores absolute path as fallback (with warning)
-        assert rel["fb"] == str(other)
+        # Paths outside export_folder are skipped — no absolute paths in DB.
+        assert "fb" not in rel
 
 
 # ---------------------------------------------------------------------------

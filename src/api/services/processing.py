@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import re
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -33,6 +32,7 @@ from bid.config import load_export_options, load_settings
 from bid.image_processing import process_photo_task
 from src.api.models.database import SessionLocal
 from src.api.models.source import PhotoRecord
+from src.api.path_utils import PathTraversalError, resolve_within, validate_path_component
 from src.api.schemas.processing import (
     PhotoTaskStatus,
     ProcessResponse,
@@ -42,60 +42,33 @@ from src.api.services.source import get_or_create_record, set_state
 
 logger = logging.getLogger("BID.api")
 
-# ── Allowed path-component characters ────────────────────────────────────────
-# Reject anything containing '..' or filesystem separators to prevent traversal.
-_SAFE_COMPONENT_RE = re.compile(r'^[^/\\<>:"|?*\x00-\x1f]+$')
-
-
-class PathTraversalError(ValueError):
-    """Raised when a path component contains traversal sequences."""
-
-
-def validate_path_component(component: str) -> None:
-    """
-    Raise PathTraversalError if *component* is empty, contains '..' literals,
-    or contains characters that could be used for directory traversal.
-    """
-    if not component:
-        raise PathTraversalError("Path component must not be empty.")
-    if ".." in component:
-        raise PathTraversalError(
-            f"Path component contains traversal sequence: {component!r}"
-        )
-    if not _SAFE_COMPONENT_RE.match(component):
-        raise PathTraversalError(
-            f"Path component contains forbidden characters: {component!r}"
-        )
-
-
-def resolve_within(base: Path, *parts: str) -> Path:
-    """
-    Join *parts* under *base*, resolve to an absolute path, and verify the
-    result does not escape *base*.  Raise PathTraversalError otherwise.
-    """
-    candidate = (base.joinpath(*parts)).resolve()
-    if not candidate.is_relative_to(base.resolve()):
-        raise PathTraversalError(
-            f"Resolved path {candidate!r} escapes allowed directory {base!r}."
-        )
-    return candidate
-
 
 def _make_relative_exports(
     abs_exports: dict[str, str], export_folder: Path
 ) -> dict[str, str]:
-    """Convert absolute export paths to paths relative to *export_folder*."""
+    """Convert absolute export paths to paths relative to *export_folder*.
+
+    Paths that cannot be made relative (i.e. they fall outside export_folder)
+    are silently skipped to prevent absolute paths from being persisted in the
+    database, which would later allow arbitrary filesystem probing.
+    """
     rel: dict[str, str] = {}
+    export_folder_resolved = export_folder.resolve()
     for profile, abs_path in abs_exports.items():
         try:
-            rel[profile] = str(Path(abs_path).relative_to(export_folder))
-        except ValueError:
-            # Fallback: store the absolute path as-is and log a warning.
+            resolved = Path(abs_path).resolve()
+            if not resolved.is_relative_to(export_folder_resolved):
+                logger.warning(
+                    f"[PROCESS] Export path {abs_path!r} is not within "
+                    f"export_folder {export_folder!r}; skipping profile {profile!r}."
+                )
+                continue
+            rel[profile] = str(resolved.relative_to(export_folder_resolved))
+        except (ValueError, OSError):
             logger.warning(
-                f"[PROCESS] Export path {abs_path!r} is not relative to "
-                f"export_folder {export_folder!r}; storing absolute path."
+                f"[PROCESS] Could not make {abs_path!r} relative to "
+                f"{export_folder!r}; skipping profile {profile!r}."
             )
-            rel[profile] = abs_path
     return rel
 
 
@@ -144,6 +117,7 @@ class ProcessingService:
         self._max_workers = max_workers
         # active tasks keyed by "{project_id}:{folder}/{photo}"
         self._active: dict[str, dict[str, Any]] = {}
+        self._queued: int = 0  # tasks created but not yet through the semaphore
         self._completed: int = 0
         self._failed: int = 0
 
@@ -204,6 +178,7 @@ class ProcessingService:
             db.flush()
             record_id: int = record.id  # capture before commit frees the session
 
+            self._queued += 1
             asyncio.create_task(
                 self._task_runner(
                     record_id=record_id,
@@ -288,7 +263,7 @@ class ProcessingService:
             if info["project_id"] == project_id
         ]
         return ProcessStatusResponse(
-            queue_length=len(active_list),
+            queue_length=self._queued,
             active=active_list,
             completed=self._completed,
             failed=self._failed,
@@ -300,10 +275,9 @@ class ProcessingService:
 
         Used by GET /api/v1/metrics/queue.
         """
-        active_count = len(self._active)
         return {
-            "queue_length": max(0, active_count - self._max_workers),
-            "active_workers": min(active_count, self._max_workers),
+            "queue_length": self._queued,
+            "active_workers": len(self._active),
             "max_workers": self._max_workers,
             "completed_total": self._completed,
             "failed_total": self._failed,
@@ -360,6 +334,7 @@ class ProcessingService:
         task_key = f"{project_id}:{folder}/{photo}"
 
         async with self._sem:
+            self._queued -= 1  # task is now actively executing, no longer waiting
             self._active[task_key] = {
                 "project_id": project_id,
                 "folder": folder,

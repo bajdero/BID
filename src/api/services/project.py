@@ -20,6 +20,7 @@ from bid.config import load_export_options, load_settings
 from bid.validators import validate_export_profile
 from src.api.config import settings
 from src.api.models.audit import AuditLog
+from src.api.models.source import PhotoRecord
 from src.api.schemas.projects import (
     AuditLogEntry,
     ExportProfileValidateResponse,
@@ -44,7 +45,7 @@ def _write_json(path: Path, data: dict) -> None:
     path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
-def _project_info(project_path: Path) -> ProjectInfo:
+def _project_info(project_path: Path, db: Session | None = None) -> ProjectInfo:
     """Build a ProjectInfo from a project directory path."""
     pid = project_path.name
 
@@ -60,7 +61,9 @@ def _project_info(project_path: Path) -> ProjectInfo:
     except Exception:
         last_modified = ""
 
-    # Photo count from source_dict.json (legacy) or SQLite record count.
+    # Photo count: prefer source_dict.json (legacy); fall back to SQLite record count.
+    # TODO(C8): once all projects are migrated to the DB, remove the source_dict.json
+    # branch and query SQLite exclusively (single source of truth).
     photo_count = 0
     source_dict = project_path / "source_dict.json"
     if source_dict.exists():
@@ -71,6 +74,13 @@ def _project_info(project_path: Path) -> ProjectInfo:
                     photo_count += len(folder)
         except Exception:
             pass
+
+    if photo_count == 0 and db is not None:
+        photo_count = (
+            db.query(PhotoRecord)
+            .filter(PhotoRecord.project_id == pid)
+            .count()
+        )
 
     return ProjectInfo(
         id=pid,
@@ -93,29 +103,29 @@ class ProjectService:
     # Listing and retrieval
     # ------------------------------------------------------------------
 
-    def list_projects(self) -> list[ProjectInfo]:
+    def list_projects(self, db: Session | None = None) -> list[ProjectInfo]:
         """Return a ProjectInfo for every sub-directory in PROJECTS_DIR."""
         projects_dir = settings.PROJECTS_DIR
         if not projects_dir.exists():
             return []
         return [
-            _project_info(p)
+            _project_info(p, db)
             for p in sorted(projects_dir.iterdir())
             if p.is_dir()
         ]
 
-    def get_project(self, project_id: str) -> ProjectInfo:
+    def get_project(self, project_id: str, db: Session | None = None) -> ProjectInfo:
         """Return project details; raises FileNotFoundError if not found."""
         project_path = settings.PROJECTS_DIR / project_id
         if not project_path.exists():
             raise FileNotFoundError(project_id)
-        return _project_info(project_path)
+        return _project_info(project_path, db)
 
     # ------------------------------------------------------------------
     # Create / delete
     # ------------------------------------------------------------------
 
-    def create_project(self, body: ProjectCreate) -> ProjectInfo:
+    def create_project(self, body: ProjectCreate, db: Session | None = None) -> ProjectInfo:
         """
         Create a new project directory with settings.json and export_option.json.
         Raises FileExistsError if a project with the same normalized name exists.
@@ -137,7 +147,7 @@ class ProjectService:
         _write_json(project_path / "export_option.json", body.export_profiles)
 
         logger.info(f"[PROJECT] Created project '{pid}' → {project_path}")
-        return _project_info(project_path)
+        return _project_info(project_path, db)
 
     def delete_project(self, project_id: str) -> None:
         """

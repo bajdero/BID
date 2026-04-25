@@ -61,7 +61,14 @@ def refresh(
 ) -> TokenResponse:
     """
     Exchange a valid *refresh_token* for a new access + refresh token pair.
-    The old refresh token is invalidated once a new pair is issued.
+
+    Previously issued refresh tokens remain valid until they expire according to
+    the server's token lifetime settings; clients should discard old refresh
+    tokens once a new pair is obtained.
+
+    # TODO(security): implement refresh-token rotation — store JTIs in a DB
+    # revocation table and invalidate the previous token on re-issue.
+    # See: https://github.com/bajdero/BID/pull/26#discussion (C4)
     """
     result = svc.refresh(db, body.refresh_token)
     if result is None:
