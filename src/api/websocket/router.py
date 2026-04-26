@@ -162,6 +162,12 @@ async def websocket_project(
                 break
 
     heartbeat_task = asyncio.create_task(_heartbeat())
+    logger.debug(
+        f"[WS] Heartbeat started — project={project_id!r} "
+        f"user={user.username!r} "
+        f"interval={settings.WS_HEARTBEAT_INTERVAL}s "
+        f"timeout={settings.WS_HEARTBEAT_TIMEOUT}s"
+    )
 
     try:
         while True:
