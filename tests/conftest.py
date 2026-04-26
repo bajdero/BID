@@ -221,3 +221,184 @@ def full_test_project(tmp_path, export_settings_fb):
         "settings": settings,
         "export_settings": export_settings_fb,
     }
+
+
+# ---------------------------------------------------------------------------
+# Fixtures for FastAPI API tests (P1-02)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def sample_api_project(tmp_path):
+    """
+    Create a minimal on-disk project directory for API integration tests.
+
+    Structure:
+        <tmp>/projects/api_test/
+            settings.json       ← source/export folder paths
+            export_option.json  ← single 'web' profile (no logo required)
+    """
+    import json as _json
+
+    projects_root = tmp_path / "projects"
+    source_dir = tmp_path / "api_source"
+    export_dir = tmp_path / "api_export"
+
+    for d in (projects_root, source_dir, export_dir):
+        d.mkdir(parents=True, exist_ok=True)
+
+    proj = projects_root / "api_test"
+    proj.mkdir()
+
+    settings_data = {
+        "source_folder": str(source_dir),
+        "export_folder": str(export_dir),
+    }
+    (proj / "settings.json").write_text(_json.dumps(settings_data), encoding="utf-8")
+
+    export_opts = {
+        "web": {
+            "size_type": "longer",
+            "size": 800,
+            "format": "JPEG",
+            "quality": 80,
+            "logo": {
+                "landscape": {"size": 200, "opacity": 60, "x_offset": 10, "y_offset": 10},
+                "portrait": {"size": 260, "opacity": 60, "x_offset": 10, "y_offset": 10},
+            },
+            "logo_required": False,
+        }
+    }
+    (proj / "export_option.json").write_text(_json.dumps(export_opts), encoding="utf-8")
+
+    return proj
+
+
+@pytest.fixture()
+def api_source_photo(sample_api_project):
+    """
+    Create a minimal JPEG in the project's source folder and return (folder, filename).
+    """
+    import json as _json
+
+    settings_data = _json.loads((sample_api_project / "settings.json").read_text())
+    source_folder = Path(settings_data["source_folder"])
+    session_dir = source_folder / "Session1"
+    session_dir.mkdir(parents=True, exist_ok=True)
+
+    img = Image.new("RGB", (400, 300), color="green")
+    img_path = session_dir / "sample.jpg"
+    img.save(img_path, "JPEG")
+
+    return "Session1", "sample.jpg"
+
+
+@pytest.fixture()
+def api_test_app(tmp_path, sample_api_project):
+    """
+    Build a FastAPI test application instance wired to:
+      - An in-memory SQLite database (isolated per test).
+      - The sample_api_project directory via PROJECTS_DIR override.
+    """
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from sqlalchemy.pool import StaticPool
+
+    from src.api.config import settings as app_settings
+    from src.api.deps import (
+        get_db,
+        get_processing_service,
+        get_project_path,
+        require_admin,
+        require_authenticated_user,
+    )
+    from src.api.main import create_app
+    from src.api.models.database import Base
+    from src.api.models.user import UserRecord
+    from src.api.services.processing import ProcessingService
+
+    import src.api.models.database as _db_mod
+
+    # ── In-memory DB ──────────────────────────────────────────────────────────
+    # StaticPool ensures all connections share one in-memory SQLite database,
+    # so tables created by init_db() are visible to request-handler sessions.
+    test_engine = create_engine(
+        "sqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(test_engine)
+    TestSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=test_engine)
+
+    # Patch module-level engine/SessionLocal so lifespan's init_db() uses the
+    # in-memory DB instead of the real file path.
+    _orig_engine = _db_mod.engine
+    _orig_session = _db_mod.SessionLocal
+    _db_mod.engine = test_engine
+    _db_mod.SessionLocal = TestSessionLocal
+
+    def override_get_db():
+        db = TestSessionLocal()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    # ── Processing service (real, but process_photo_task is mocked in tests) ─
+    test_svc = ProcessingService(max_workers=1)
+
+    def override_get_processing_service():
+        return test_svc
+
+    # ── Project path resolver pointing at tmp projects root ──────────────────
+    import re as _re
+    _SAFE_RE = _re.compile(r"^[a-zA-Z0-9_\-.]+$")
+
+    def override_get_project_path(project_id: str):
+        from fastapi import HTTPException
+        if not _SAFE_RE.match(project_id):
+            raise HTTPException(status_code=400, detail="Invalid project id")
+        p = sample_api_project.parent / project_id
+        if not p.exists():
+            raise HTTPException(status_code=404, detail=f"Project '{project_id}' not found.")
+        return p
+
+    # Point project resolution to the temporary projects root.
+    _orig_projects_dir = app_settings.PROJECTS_DIR
+    app_settings.PROJECTS_DIR = sample_api_project.parent
+
+    # ── Build app wired to the test in-memory database ────────────────────────
+    app = create_app()
+    app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[get_processing_service] = override_get_processing_service
+    app.dependency_overrides[get_project_path] = override_get_project_path
+
+    # Auth guard overrides: most API integration tests are not auth-focused,
+    # so we inject a fixed admin user to keep test setup lightweight.
+    test_user = UserRecord(
+        id=1,
+        username="test_admin",
+        email="admin@test.local",
+        hashed_password="x",
+        role="admin",
+        is_active=True,
+    )
+
+    def override_require_authenticated_user():
+        return test_user
+
+    def override_require_admin():
+        return test_user
+
+    app.dependency_overrides[require_authenticated_user] = override_require_authenticated_user
+    app.dependency_overrides[require_admin] = override_require_admin
+
+    yield app
+
+    test_svc.shutdown()
+    Base.metadata.drop_all(test_engine)
+    test_engine.dispose()
+    # Restore original module-level DB objects
+    _db_mod.engine = _orig_engine
+    _db_mod.SessionLocal = _orig_session
+    app_settings.PROJECTS_DIR = _orig_projects_dir
