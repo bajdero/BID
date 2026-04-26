@@ -27,7 +27,10 @@ from src.api.deps import require_authenticated_user
 from src.api.errors import register_exception_handlers
 from src.api.models.database import init_db
 from src.api.routers import auth, exports, processing, projects, system, users
+from src.api.services.events import EventBroadcastService, set_event_service, get_event_service
 from src.api.services.processing import ProcessingService, set_service, get_service
+from src.api.websocket import router as ws_router
+from src.api.websocket.manager import ConnectionManager, set_manager
 
 logger = logging.getLogger("BID.api")
 
@@ -90,6 +93,18 @@ OPENAPI_TAGS: list[dict] = [
             "Supports create, list, update (role/state/email), and delete operations."
         ),
     },
+    {
+        "name": "websocket",
+        "description": (
+            "WebSocket real-time event streaming (Phase 2).  "
+            "Connect to `GET /api/v1/projects/{project_id}/ws?token=<access_token>` "
+            "to receive `state_change`, `progress`, `scan_update`, `queue_metrics`, "
+            "and `error` frames as processing progresses.  "
+            "Send `{\"type\":\"subscribe\",\"folders\":[...]}` to filter by sub-folder.  "
+            "The server sends periodic `ping` frames; reply with `pong` to keep the "
+            "connection alive."
+        ),
+    },
 ]
 
 # ---------------------------------------------------------------------------
@@ -103,15 +118,25 @@ async def lifespan(app: FastAPI):
     logger.info("[API] Starting up — initialising database and processing service.")
     init_db()
 
+    ws_manager = ConnectionManager()
+    set_manager(ws_manager)
+    logger.info("[API] ConnectionManager ready.")
+
     svc = ProcessingService(max_workers=settings.MAX_CONCURRENT_TASKS)
+    svc.set_ws_manager(ws_manager)
     set_service(svc)
     logger.info(
         f"[API] ProcessingService ready (max_workers={settings.MAX_CONCURRENT_TASKS})."
     )
 
+    event_svc = EventBroadcastService()
+    set_event_service(event_svc)
+    logger.info("[API] EventBroadcastService ready.")
+
     yield  # ← application runs here
 
-    logger.info("[API] Shutting down — stopping processing service.")
+    logger.info("[API] Shutting down — stopping services.")
+    get_event_service().stop_all()
     get_service().shutdown()
 
 
@@ -133,8 +158,8 @@ def create_app() -> FastAPI:
             "## Road-map\n"
             "| Phase | Milestone | Status |\n"
             "|-------|-----------|--------|\n"
-            "| 1 | Backend API Extraction | **In progress** |\n"
-            "| 2 | WebSocket real-time layer | Planned |\n"
+            "| 1 | Backend API Extraction | **Done** |\n"
+            "| 2 | WebSocket real-time layer | **In progress** |\n"
             "| 3 | React/TypeScript frontend | Planned |\n"
             "| 4 | Event system | Planned |\n\n"
             "## Auth\n"
@@ -194,6 +219,9 @@ def create_app() -> FastAPI:
         prefix=prefix,
         dependencies=[Depends(require_authenticated_user)],
     )
+    # WebSocket endpoint — auth is handled inside the route handler
+    # (query-param JWT, no Bearer header support in browser WS API)
+    app.include_router(ws_router, prefix=prefix)
 
     return app
 

@@ -60,6 +60,12 @@ class Settings(BaseSettings):
     # Refresh token lifetime (seconds); default 7 days.
     REFRESH_TOKEN_EXPIRE_SECONDS: int = Field(default=604800, ge=60)
 
+    # ---------------------------------------------------------- WebSocket
+    # Seconds between server-initiated ping frames.
+    WS_HEARTBEAT_INTERVAL: int = Field(default=30, ge=5, le=300)
+    # Seconds the server waits for a pong before closing the connection.
+    WS_HEARTBEAT_TIMEOUT: int = Field(default=10, ge=2, le=60)
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

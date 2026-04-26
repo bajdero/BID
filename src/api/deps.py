@@ -23,6 +23,7 @@ from src.api.services.auth import AuthService, decode_token
 from src.api.services.processing import ProcessingService, get_service
 from src.api.services.project import ProjectService
 from src.api.services.source import SourceService
+from src.api.websocket.manager import ConnectionManager, get_manager
 
 # --------------------------------------------------------------------------
 # Project identifier validation
@@ -92,6 +93,11 @@ def get_project_service() -> ProjectService:
 def get_auth_service() -> AuthService:
     """Return a new (stateless) AuthService instance."""
     return AuthService()
+
+
+def get_connection_manager() -> ConnectionManager:
+    """Return the application-singleton ConnectionManager."""
+    return get_manager()
 
 
 # --------------------------------------------------------------------------

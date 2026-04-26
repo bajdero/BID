@@ -24,7 +24,7 @@ import logging
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy.orm import Session
 
@@ -39,6 +39,11 @@ from src.api.schemas.processing import (
     ProcessStatusResponse,
 )
 from src.api.services.source import get_or_create_record, set_state
+
+# Forward reference: imported lazily inside methods to avoid circular imports
+# with the websocket package (websocket.manager imports nothing from services).
+if TYPE_CHECKING:  # noqa: F821
+    from src.api.websocket.manager import ConnectionManager
 
 logger = logging.getLogger("BID.api")
 
@@ -120,9 +125,28 @@ class ProcessingService:
         self._queued: int = 0  # tasks created but not yet through the semaphore
         self._completed: int = 0
         self._failed: int = 0
+        # Optional ConnectionManager — set post-init from main.py lifespan.
+        # Kept optional to allow ProcessingService to be instantiated in tests
+        # without a running WebSocket layer.
+        self._ws_manager: "ConnectionManager | None" = None
+        self._metrics_task: asyncio.Task | None = None
+
+    def set_ws_manager(self, manager: "ConnectionManager") -> None:
+        """Register the ConnectionManager for WebSocket broadcasting.
+
+        Called from the FastAPI lifespan handler after both services have been
+        initialised.  Once set, processing events are broadcast to connected
+        WebSocket clients in real time.
+        """
+        self._ws_manager = manager
+        if self._metrics_task is None or self._metrics_task.done():
+            self._metrics_task = asyncio.create_task(self._broadcast_metrics_loop())
+            logger.info("[PROCESS] WebSocket manager registered; metrics loop started.")
 
     def shutdown(self) -> None:
         """Gracefully shut down the thread pool (called on app shutdown)."""
+        if self._metrics_task is not None:
+            self._metrics_task.cancel()
         self._executor.shutdown(wait=False)
 
     # ------------------------------------------------------------------
@@ -313,6 +337,26 @@ class ProcessingService:
     # Background task runner (private)
     # ------------------------------------------------------------------
 
+    async def _broadcast_metrics_loop(self) -> None:
+        """Broadcast queue_metrics to all connected clients every 5 seconds.
+
+        Only fires when a ConnectionManager is registered and at least one
+        client is connected, to avoid unnecessary work during idle periods.
+        """
+        from src.api.websocket.schemas import QueueMetricsMessage
+
+        while True:
+            try:
+                await asyncio.sleep(5)
+                if self._ws_manager is None or not self._ws_manager.has_connections():
+                    continue
+                msg = QueueMetricsMessage(**self.get_global_metrics())
+                await self._ws_manager.broadcast_all(msg.model_dump())
+            except asyncio.CancelledError:
+                break
+            except Exception:
+                logger.exception("[PROCESS] Error in metrics broadcast loop")
+
     async def _task_runner(
         self,
         *,
@@ -341,6 +385,20 @@ class ProcessingService:
                 "photo": photo,
             }
             loop = asyncio.get_event_loop()
+
+            # Broadcast state_change: new → processing
+            if self._ws_manager is not None:
+                from src.api.websocket.schemas import StateChangeMessage
+                await self._ws_manager.broadcast_to_project(
+                    project_id,
+                    StateChangeMessage(
+                        project_id=project_id,
+                        folder=folder,
+                        photo=photo,
+                        old_state="new",
+                        new_state="processing",
+                    ).model_dump(),
+                )
 
             try:
                 # Resolve existing absolute export paths from stored relative paths.
@@ -386,12 +444,36 @@ class ProcessingService:
                         f"[PROCESS] OK: {project_id}:{folder}/{photo}"
                         f" — {len(exported_rel)} export(s) in {duration:.2f}s"
                     )
+                    if self._ws_manager is not None:
+                        from src.api.websocket.schemas import ProgressMessage
+                        await self._ws_manager.broadcast_to_project(
+                            project_id,
+                            ProgressMessage(
+                                project_id=project_id,
+                                folder=folder,
+                                photo=photo,
+                                status="completed",
+                                duration_sec=float(duration),
+                                exported_paths=exported_rel,
+                            ).model_dump(),
+                        )
                 else:
                     self._failed += 1
                     logger.error(
                         f"[PROCESS] FAILED: {project_id}:{folder}/{photo}"
                         f" — {error_msg}"
                     )
+                    if self._ws_manager is not None:
+                        from src.api.websocket.schemas import ErrorMessage
+                        await self._ws_manager.broadcast_to_project(
+                            project_id,
+                            ErrorMessage(
+                                project_id=project_id,
+                                folder=folder,
+                                photo=photo,
+                                message=error_msg or "Unknown processing error",
+                            ).model_dump(),
+                        )
 
             except Exception as exc:
                 self._failed += 1
