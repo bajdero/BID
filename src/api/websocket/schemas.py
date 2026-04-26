@@ -15,7 +15,7 @@ Usage pattern — server receives and dispatches:
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Annotated, Any, Literal, Union
 
 from pydantic import BaseModel, Field
@@ -35,7 +35,7 @@ class StateChangeMessage(BaseModel):
     photo: str
     old_state: str
     new_state: str
-    timestamp: str = Field(default_factory=lambda: datetime.utcnow().isoformat() + "Z")
+    timestamp: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
 
 
 class ProgressMessage(BaseModel):
@@ -48,7 +48,7 @@ class ProgressMessage(BaseModel):
     status: Literal["started", "completed", "failed"]
     duration_sec: float | None = None
     exported_paths: dict[str, str] = Field(default_factory=dict)
-    timestamp: str = Field(default_factory=lambda: datetime.utcnow().isoformat() + "Z")
+    timestamp: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
 
 
 class ScanUpdateMessage(BaseModel):
@@ -59,7 +59,7 @@ class ScanUpdateMessage(BaseModel):
     found_new: bool
     new_count: int
     updated_folders: list[str] = Field(default_factory=list)
-    timestamp: str = Field(default_factory=lambda: datetime.utcnow().isoformat() + "Z")
+    timestamp: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
 
 
 class MonitorUpdateMessage(BaseModel):
@@ -70,7 +70,7 @@ class MonitorUpdateMessage(BaseModel):
     folder: str
     photo: str
     ready: bool
-    timestamp: str = Field(default_factory=lambda: datetime.utcnow().isoformat() + "Z")
+    timestamp: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
 
 
 class ErrorMessage(BaseModel):
@@ -81,7 +81,7 @@ class ErrorMessage(BaseModel):
     folder: str
     photo: str
     message: str
-    timestamp: str = Field(default_factory=lambda: datetime.utcnow().isoformat() + "Z")
+    timestamp: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
 
 
 class QueueMetricsMessage(BaseModel):
@@ -93,7 +93,7 @@ class QueueMetricsMessage(BaseModel):
     max_workers: int
     completed_total: int
     failed_total: int
-    timestamp: str = Field(default_factory=lambda: datetime.utcnow().isoformat() + "Z")
+    timestamp: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
 
 
 class ExportConflictMessage(BaseModel):
@@ -106,14 +106,14 @@ class ExportConflictMessage(BaseModel):
     photo: str
     target_path: str
     status: Literal["blocked"] = "blocked"
-    timestamp: str = Field(default_factory=lambda: datetime.utcnow().isoformat() + "Z")
+    timestamp: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
 
 
 class PingMessage(BaseModel):
     """Server-initiated application-level heartbeat ping."""
 
     type: Literal["ping"] = "ping"
-    timestamp: str = Field(default_factory=lambda: datetime.utcnow().isoformat() + "Z")
+    timestamp: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
 
 
 class ServerClosingMessage(BaseModel):
