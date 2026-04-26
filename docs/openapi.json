@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "BID \u2014 Batch Image Delivery API",
-    "description": "REST API for the **BID** (*Batch Image Delivery*) image-processing pipeline.\n\nBID automates batch photo processing: automatic scaling, watermark overlay, EXIF cleaning, colour-space conversion, and delivery-folder export.  This API exposes the processing core as an OpenAPI 3.0-compliant service, decoupled from the legacy Tkinter UI.\n\n## Road-map\n| Phase | Milestone | Status |\n|-------|-----------|--------|\n| 1 | Backend API Extraction | **In progress** |\n| 2 | WebSocket real-time layer | Planned |\n| 3 | React/TypeScript frontend | Planned |\n| 4 | Event system | Planned |\n\n## Auth\nPhase 1 includes a JWT-based auth layer. Protected endpoints require a valid Bearer token in the `Authorization` header.\n\n## Errors\nAll error responses use the `ErrorResponse` schema: `{ \"detail\": \"...\", \"field\": \"...\" }`.",
+    "description": "REST API for the **BID** (*Batch Image Delivery*) image-processing pipeline.\n\nBID automates batch photo processing: automatic scaling, watermark overlay, EXIF cleaning, colour-space conversion, and delivery-folder export.  This API exposes the processing core as an OpenAPI 3.0-compliant service, decoupled from the legacy Tkinter UI.\n\n## Road-map\n| Phase | Milestone | Status |\n|-------|-----------|--------|\n| 1 | Backend API Extraction | **In progress** |\n| 2 | WebSocket real-time layer | Planned |\n| 3 | React/TypeScript frontend | Planned |\n| 4 | Event system | Planned |\n\n## Auth\nProtected endpoints require `Authorization: Bearer <access_token>`.  Obtain tokens via `POST /api/v1/auth/login`.  Admin-only endpoints additionally require the `admin` role.\n\n## Errors\nAll error responses use the `ErrorResponse` schema: `{ \"detail\": \"...\", \"field\": \"...\" }`.",
     "contact": {
       "name": "BID project",
       "url": "https://github.com/bajdero/BID"
@@ -80,6 +80,493 @@
         }
       }
     },
+    "/api/v1/auth/login": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Login and receive JWT tokens",
+        "description": "Authenticate with *username* and *password*.\n\nOn success returns an **access token** (short-lived) and a **refresh token**\n(long-lived).  Pass the access token as `Authorization: Bearer <token>` on\nprotected endpoints.",
+        "operationId": "login_api_v1_auth_login_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid credentials or expired token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/refresh": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Refresh access token",
+        "description": "Exchange a valid *refresh_token* for a new access + refresh token pair.\n\nPreviously issued refresh tokens remain valid until they expire according to\nthe server's token lifetime settings; clients should discard old refresh\ntokens once a new pair is obtained.\n\n# TODO(security): implement refresh-token rotation \u2014 store JTIs in a DB\n# revocation table and invalidate the previous token on re-issue.\n# See: https://github.com/bajdero/BID/pull/26#discussion (C4)",
+        "operationId": "refresh_api_v1_auth_refresh_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RefreshRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid credentials or expired token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/users": {
+      "get": {
+        "tags": [
+          "users"
+        ],
+        "summary": "List all users (admin only)",
+        "description": "Return all user records ordered by creation date. Requires admin role.",
+        "operationId": "list_users_api_v1_users_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/UserResponse"
+                  },
+                  "type": "array",
+                  "title": "Response List Users Api V1 Users Get"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Admin role required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "User not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Username or email already in use.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Create a new user (admin only)",
+        "description": "Create a new user account.  Returns **409 Conflict** if *username* or\n*email* is already taken.",
+        "operationId": "create_user_api_v1_users_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UserCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Admin role required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "User not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Username or email already in use.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/users/{user_id}": {
+      "put": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Update user role / state / email (admin only)",
+        "description": "Partially update a user's *role*, *is_active*, or *email*.",
+        "operationId": "update_user_api_v1_users__user_id__put",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "User Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UserUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Admin role required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "User not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Username or email already in use.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Delete a user (admin only)",
+        "description": "Permanently remove a user account.",
+        "operationId": "delete_user_api_v1_users__user_id__delete",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "User Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "400": {
+            "description": "Validation error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Admin role required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "User not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Username or email already in use.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/projects/{project_id}/process": {
       "post": {
         "tags": [
@@ -88,6 +575,11 @@
         "summary": "Enqueue selected photos for processing",
         "description": "Validate and enqueue the photos listed in *body.photos*.\nReturns immediately; processing runs in the background.",
         "operationId": "process_selected_api_v1_projects__project_id__process_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "project_id",
@@ -171,6 +663,11 @@
         "summary": "Enqueue all NEW photos in the project",
         "description": "Scan the project source_folder and enqueue every photo whose state is\n``new``, ``export_fail``, or ``error``.",
         "operationId": "process_all_api_v1_projects__project_id__process_all_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "project_id",
@@ -244,6 +741,11 @@
         "summary": "Reset a photo to NEW state (re-queue)",
         "description": "Reset the photo identified by *folder/photo* back to state ``new`` so it\nwill be picked up by the next ``process/all`` run.\n\nReturns HTTP 404 if the photo is not found in the source index.",
         "operationId": "reset_photo_api_v1_projects__project_id__process__folder___photo__delete",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "project_id",
@@ -337,6 +839,11 @@
         "summary": "Current processing-queue status",
         "description": "Return a snapshot of the in-flight and completed task counters.",
         "operationId": "get_process_status_api_v1_projects__project_id__process_status_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "project_id",
@@ -390,6 +897,11 @@
         "summary": "List blocked / missing export files",
         "description": "Return export entries where the expected output file is missing or has\nzero bytes on disk \u2014 indicating the photo needs to be re-processed.",
         "operationId": "list_conflicts_api_v1_projects__project_id__exports_conflicts_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "project_id",
@@ -457,6 +969,11 @@
         "summary": "Resolve export conflicts",
         "description": "Apply *body.action* to the matching conflict records.\n\n- ``action=\"replace\"`` resets state to ``new`` (re-queues for processing).\n- ``action=\"skip\"``    marks the photo as ``skip``.",
         "operationId": "resolve_conflicts_api_v1_projects__project_id__exports_conflicts_resolve_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "project_id",
@@ -523,10 +1040,1038 @@
           }
         }
       }
+    },
+    "/api/v1/projects": {
+      "get": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "List all projects",
+        "description": "Return a summary record for every project directory in PROJECTS_DIR.",
+        "operationId": "list_projects_api_v1_projects_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ProjectInfo"
+                  },
+                  "type": "array",
+                  "title": "Response List Projects Api V1 Projects Get"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Project not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Project already exists.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "Create a new project",
+        "description": "Create a new project directory with *settings.json* and *export_option.json*.\n\nThe project identifier (URL segment) is derived by replacing spaces with\nunderscores in *body.name*.  Returns **409 Conflict** if a project with the\nsame normalised name already exists.",
+        "operationId": "create_project_api_v1_projects_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProjectCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectInfo"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Project not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Project already exists.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/projects/{project_id}": {
+      "get": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "Get project details",
+        "description": "Return full details for a single project.",
+        "operationId": "get_project_api_v1_projects__project_id__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectInfo"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Project not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Project already exists.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "Delete a project",
+        "description": "Permanently remove the project directory and all its files from disk.\n\n**This action is irreversible.**  Source and export files are NOT deleted \u2014\nonly the project metadata directory is removed.",
+        "operationId": "delete_project_api_v1_projects__project_id__delete",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "400": {
+            "description": "Bad request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Project not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Project already exists.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/settings": {
+      "get": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "Get project settings",
+        "description": "Return the contents of the project's *settings.json*.",
+        "operationId": "get_settings_api_v1_projects__project_id__settings_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectSettings"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Project not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Project already exists.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "Update project settings",
+        "description": "Overwrite the project's *settings.json* with *body* and return the saved values.",
+        "operationId": "update_settings_api_v1_projects__project_id__settings_put",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProjectSettings"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectSettings"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Project not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Project already exists.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/export-profiles": {
+      "get": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "Get export profile definitions",
+        "description": "Return all export profiles defined in the project's *export_option.json*.",
+        "operationId": "get_export_profiles_api_v1_projects__project_id__export_profiles_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExportProfilesResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Project not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Project already exists.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "Update export profiles",
+        "description": "Replace the project's *export_option.json* with the supplied profiles dict.",
+        "operationId": "update_export_profiles_api_v1_projects__project_id__export_profiles_put",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true,
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExportProfilesResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Project not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Project already exists.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/export-profiles/validate": {
+      "post": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "Validate a single export profile",
+        "description": "Run the BID validator against *body.profile* and return a list of any errors.\nThe project directory does not need any existing profiles for this to work.",
+        "operationId": "validate_export_profile_api_v1_projects__project_id__export_profiles_validate_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExportProfileValidateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExportProfileValidateResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Project not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Project already exists.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/audit/logs": {
+      "get": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "Immutable audit log stream",
+        "description": "Return the immutable audit trail for a project, newest first.\n\nFilterable by `action` (e.g. `state_change`, `metadata_update`) and `folder`.\nSupports pagination via `limit` / `offset`.",
+        "operationId": "get_audit_logs_api_v1_projects__project_id__audit_logs_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 1000,
+              "minimum": 1,
+              "description": "Max records to return.",
+              "default": 100,
+              "title": "Limit"
+            },
+            "description": "Max records to return."
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Pagination offset.",
+              "default": 0,
+              "title": "Offset"
+            },
+            "description": "Pagination offset."
+          },
+          {
+            "name": "action",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by action type.",
+              "title": "Action"
+            },
+            "description": "Filter by action type."
+          },
+          {
+            "name": "folder",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by folder name.",
+              "title": "Folder"
+            },
+            "description": "Filter by folder name."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AuditLogEntry"
+                  },
+                  "title": "Response Get Audit Logs Api V1 Projects  Project Id  Audit Logs Get"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Project not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Project already exists.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
     "schemas": {
+      "AuditLogEntry": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "project_id": {
+            "type": "string",
+            "title": "Project Id"
+          },
+          "folder": {
+            "type": "string",
+            "title": "Folder"
+          },
+          "filename": {
+            "type": "string",
+            "title": "Filename"
+          },
+          "action": {
+            "type": "string",
+            "title": "Action"
+          },
+          "old_value": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Old Value"
+          },
+          "new_value": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "New Value"
+          },
+          "timestamp": {
+            "type": "string",
+            "title": "Timestamp"
+          },
+          "user_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "project_id",
+          "folder",
+          "filename",
+          "action",
+          "timestamp"
+        ],
+        "title": "AuditLogEntry",
+        "description": "Single audit log record returned by GET /audit/logs.",
+        "example": {
+          "action": "state_change",
+          "filename": "IMG_001.jpg",
+          "folder": "Session1",
+          "id": 1,
+          "new_value": "ok",
+          "old_value": "new",
+          "project_id": "my_project",
+          "timestamp": "2026-03-23T15:30:00"
+        }
+      },
       "ConflictItem": {
         "properties": {
           "profile": {
@@ -661,6 +2206,173 @@
           "detail": "Project 'my_project' not found."
         }
       },
+      "ExportProfile": {
+        "properties": {
+          "size_type": {
+            "type": "string",
+            "enum": [
+              "longer",
+              "width",
+              "height",
+              "shorter"
+            ],
+            "title": "Size Type"
+          },
+          "size": {
+            "type": "integer",
+            "maximum": 10000.0,
+            "minimum": 100.0,
+            "title": "Size",
+            "description": "Target size in pixels."
+          },
+          "format": {
+            "type": "string",
+            "enum": [
+              "JPEG",
+              "PNG"
+            ],
+            "title": "Format"
+          },
+          "quality": {
+            "type": "integer",
+            "maximum": 100.0,
+            "minimum": 1.0,
+            "title": "Quality",
+            "description": "JPEG quality 1\u2013100."
+          },
+          "ratio": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ratio",
+            "description": "Allowed aspect-ratio range [min, max]."
+          },
+          "logo": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/LogoOrientationSettings"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Logo"
+          },
+          "logo_required": {
+            "type": "boolean",
+            "title": "Logo Required",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "size_type",
+          "size",
+          "format",
+          "quality"
+        ],
+        "title": "ExportProfile",
+        "description": "Full export-profile definition (mirrors bid.validators constraints).",
+        "example": {
+          "format": "JPEG",
+          "logo": {
+            "landscape": {
+              "opacity": 60,
+              "placement": "bottom-right",
+              "size": 200,
+              "x_offset": 10,
+              "y_offset": 10
+            }
+          },
+          "logo_required": false,
+          "quality": 85,
+          "size": 1200,
+          "size_type": "longer"
+        }
+      },
+      "ExportProfileValidateRequest": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Name",
+            "description": "Profile key name."
+          },
+          "profile": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Profile",
+            "description": "Raw profile dict to validate."
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "profile"
+        ],
+        "title": "ExportProfileValidateRequest",
+        "description": "Body for POST /export-profiles/validate."
+      },
+      "ExportProfileValidateResponse": {
+        "properties": {
+          "valid": {
+            "type": "boolean",
+            "title": "Valid"
+          },
+          "errors": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Errors"
+          }
+        },
+        "type": "object",
+        "required": [
+          "valid"
+        ],
+        "title": "ExportProfileValidateResponse",
+        "description": "Validation result for a single export profile."
+      },
+      "ExportProfilesResponse": {
+        "properties": {
+          "profiles": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ExportProfile"
+            },
+            "type": "object",
+            "title": "Profiles"
+          }
+        },
+        "type": "object",
+        "required": [
+          "profiles"
+        ],
+        "title": "ExportProfilesResponse",
+        "description": "Response for GET /export-profiles \u2014 maps profile name \u2192 profile definition.",
+        "example": {
+          "profiles": {
+            "web": {
+              "format": "JPEG",
+              "logo_required": false,
+              "quality": 80,
+              "size": 800,
+              "size_type": "longer"
+            }
+          }
+        }
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -687,6 +2399,79 @@
         "example": {
           "status": "ok"
         }
+      },
+      "LoginRequest": {
+        "properties": {
+          "username": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Username"
+          },
+          "password": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Password"
+          }
+        },
+        "type": "object",
+        "required": [
+          "username",
+          "password"
+        ],
+        "title": "LoginRequest",
+        "example": {
+          "password": "s3cr3t",
+          "username": "admin"
+        }
+      },
+      "LogoOrientationSettings": {
+        "properties": {
+          "size": {
+            "type": "integer",
+            "maximum": 2000.0,
+            "minimum": 10.0,
+            "title": "Size",
+            "description": "Logo width in pixels."
+          },
+          "opacity": {
+            "type": "integer",
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Opacity",
+            "description": "Opacity 0\u2013100."
+          },
+          "x_offset": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "X Offset",
+            "description": "Horizontal offset in pixels."
+          },
+          "y_offset": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Y Offset",
+            "description": "Vertical offset in pixels."
+          },
+          "placement": {
+            "type": "string",
+            "enum": [
+              "top-left",
+              "top-right",
+              "bottom-left",
+              "bottom-right"
+            ],
+            "title": "Placement",
+            "default": "bottom-right"
+          }
+        },
+        "type": "object",
+        "required": [
+          "size",
+          "opacity",
+          "x_offset",
+          "y_offset"
+        ],
+        "title": "LogoOrientationSettings"
       },
       "PhotoTaskStatus": {
         "properties": {
@@ -873,6 +2658,133 @@
           "queue_length": 1
         }
       },
+      "ProjectCreate": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[a-zA-Z0-9 _\\-]+$",
+            "title": "Name",
+            "description": "Project display name (only letters, digits, spaces, underscores, hyphens)."
+          },
+          "source_folder": {
+            "type": "string",
+            "title": "Source Folder",
+            "description": "Absolute path to the source folder."
+          },
+          "export_folder": {
+            "type": "string",
+            "title": "Export Folder",
+            "description": "Absolute path to the export folder."
+          },
+          "export_profiles": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Export Profiles",
+            "description": "Initial export profile definitions."
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "source_folder",
+          "export_folder"
+        ],
+        "title": "ProjectCreate",
+        "description": "Body for POST /projects.",
+        "example": {
+          "export_folder": "/data/export/conference2026",
+          "export_profiles": {},
+          "name": "Conference 2026",
+          "source_folder": "/data/source/conference2026"
+        }
+      },
+      "ProjectInfo": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id",
+            "description": "Project directory name (URL-safe identifier)."
+          },
+          "name": {
+            "type": "string",
+            "title": "Name",
+            "description": "Human-readable project name."
+          },
+          "path": {
+            "type": "string",
+            "title": "Path",
+            "description": "Absolute path on disk."
+          },
+          "last_modified": {
+            "type": "string",
+            "title": "Last Modified",
+            "description": "ISO-formatted last-modification time."
+          },
+          "photo_count": {
+            "type": "integer",
+            "title": "Photo Count",
+            "description": "Number of indexed photos.",
+            "default": 0
+          },
+          "source_folder": {
+            "type": "string",
+            "title": "Source Folder",
+            "description": "Configured source folder path.",
+            "default": ""
+          },
+          "export_folder": {
+            "type": "string",
+            "title": "Export Folder",
+            "description": "Configured export folder path.",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "path",
+          "last_modified"
+        ],
+        "title": "ProjectInfo",
+        "description": "Summary record for one project \u2014 returned in list and detail responses.",
+        "example": {
+          "export_folder": "/data/export/my_project",
+          "id": "my_project",
+          "last_modified": "2026-03-23T15:00:00",
+          "name": "my project",
+          "path": "/data/projects/my_project",
+          "photo_count": 142,
+          "source_folder": "/data/source/my_project"
+        }
+      },
+      "ProjectSettings": {
+        "properties": {
+          "source_folder": {
+            "type": "string",
+            "title": "Source Folder",
+            "description": "Absolute path to the source image folder."
+          },
+          "export_folder": {
+            "type": "string",
+            "title": "Export Folder",
+            "description": "Absolute path to the export destination."
+          }
+        },
+        "type": "object",
+        "required": [
+          "source_folder",
+          "export_folder"
+        ],
+        "title": "ProjectSettings",
+        "description": "Mirrors the settings.json file structure.",
+        "example": {
+          "export_folder": "/data/export/my_project",
+          "source_folder": "/data/source/my_project"
+        }
+      },
       "QueueMetricsResponse": {
         "properties": {
           "queue_length": {
@@ -926,6 +2838,208 @@
           "max_workers": 5,
           "queue_length": 3,
           "utilization_pct": 40.0
+        }
+      },
+      "RefreshRequest": {
+        "properties": {
+          "refresh_token": {
+            "type": "string",
+            "title": "Refresh Token"
+          }
+        },
+        "type": "object",
+        "required": [
+          "refresh_token"
+        ],
+        "title": "RefreshRequest"
+      },
+      "TokenResponse": {
+        "properties": {
+          "access_token": {
+            "type": "string",
+            "title": "Access Token"
+          },
+          "refresh_token": {
+            "type": "string",
+            "title": "Refresh Token"
+          },
+          "token_type": {
+            "type": "string",
+            "title": "Token Type",
+            "default": "bearer"
+          },
+          "expires_in": {
+            "type": "integer",
+            "title": "Expires In",
+            "description": "Access-token lifetime in seconds."
+          }
+        },
+        "type": "object",
+        "required": [
+          "access_token",
+          "refresh_token",
+          "expires_in"
+        ],
+        "title": "TokenResponse",
+        "example": {
+          "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+          "expires_in": 1800,
+          "refresh_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+          "token_type": "bearer"
+        }
+      },
+      "UserCreate": {
+        "properties": {
+          "username": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 3,
+            "pattern": "^[a-zA-Z0-9_\\-]+$",
+            "title": "Username"
+          },
+          "email": {
+            "type": "string",
+            "format": "email",
+            "title": "Email"
+          },
+          "password": {
+            "type": "string",
+            "minLength": 8,
+            "title": "Password",
+            "description": "Plain-text password (hashed server-side)."
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "admin",
+              "editor",
+              "viewer"
+            ],
+            "title": "Role",
+            "default": "editor"
+          }
+        },
+        "type": "object",
+        "required": [
+          "username",
+          "email",
+          "password"
+        ],
+        "title": "UserCreate",
+        "example": {
+          "email": "editor@example.com",
+          "password": "Str0ng!Pass",
+          "role": "editor",
+          "username": "photo_editor"
+        }
+      },
+      "UserResponse": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "username": {
+            "type": "string",
+            "title": "Username"
+          },
+          "email": {
+            "type": "string",
+            "title": "Email"
+          },
+          "role": {
+            "type": "string",
+            "title": "Role"
+          },
+          "is_active": {
+            "type": "boolean",
+            "title": "Is Active"
+          },
+          "created_at": {
+            "type": "string",
+            "title": "Created At"
+          },
+          "last_login": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Login"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "username",
+          "email",
+          "role",
+          "is_active",
+          "created_at"
+        ],
+        "title": "UserResponse",
+        "description": "Public representation of a user record (no password).",
+        "example": {
+          "created_at": "2026-03-23T12:00:00",
+          "email": "admin@example.com",
+          "id": 1,
+          "is_active": true,
+          "last_login": "2026-03-23T15:00:00",
+          "role": "admin",
+          "username": "admin"
+        }
+      },
+      "UserUpdate": {
+        "properties": {
+          "role": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "editor",
+                  "viewer"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Role"
+          },
+          "is_active": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Is Active"
+          },
+          "email": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "email"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email"
+          }
+        },
+        "type": "object",
+        "title": "UserUpdate",
+        "description": "Partial update \u2014 only provided fields are changed.",
+        "example": {
+          "is_active": true,
+          "role": "viewer"
         }
       },
       "ValidationError": {
@@ -990,6 +3104,12 @@
           "bid_version": "2.0.0-dev"
         }
       }
+    },
+    "securitySchemes": {
+      "HTTPBearer": {
+        "type": "http",
+        "scheme": "bearer"
+      }
     }
   },
   "tags": [
@@ -1004,6 +3124,18 @@
     {
       "name": "exports",
       "description": "Export-conflict management.  Lists photos whose expected output file is missing or zero-byte (*blocked exports*) and provides a bulk-resolve action to either re-queue (`replace`) or permanently skip (`skip`) conflicting entries."
+    },
+    {
+      "name": "projects",
+      "description": "Project directory CRUD, settings management, and export-profile configuration.  Projects are on-disk directories under `PROJECTS_DIR`; each contains `settings.json` (source/export folder paths) and `export_option.json` (profile definitions).  Also exposes the immutable per-project audit-log stream."
+    },
+    {
+      "name": "auth",
+      "description": "JWT-based authentication.  POST `/auth/login` with username + password to receive an access token (30 min, default) and a refresh token (7 days, default).  Pass the access token as `Authorization: Bearer <token>`."
+    },
+    {
+      "name": "users",
+      "description": "User account management \u2014 **admin role required**.  Supports create, list, update (role/state/email), and delete operations."
     }
   ]
 }
