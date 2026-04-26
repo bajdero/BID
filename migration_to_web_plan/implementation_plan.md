@@ -30,10 +30,11 @@ the Tkinter UI, with the photo processing pipeline as the first delivery priorit
 
 ---
 
-## Phase 1 — Backend API Extraction
+## Phase 1 — Backend API Extraction  ✅ COMPLETE
 
 **Milestone:** M1 — Backend API Extraction (Phase 1)  
 **Due:** 2026-05-31  
+**Completed:** 2026-04-25  
 **Goal:** Decouple the processing core from the Tkinter UI and expose it as a documented REST API.
 
 ### Deliverables
@@ -57,27 +58,42 @@ the Tkinter UI, with the photo processing pipeline as the first delivery priorit
 
 ---
 
-## Phase 2 — WebSocket Real-Time Layer
+## Phase 2 — WebSocket Real-Time Layer  ✅ COMPLETE
 
 **Milestone:** M2 — WebSocket Real-Time Layer (Phase 2)  
 **Due:** 2026-06-21  
+**Completed:** 2026-04-26  
 **Goal:** Stream processing progress and system events to connected clients in real time.
 
 ### Deliverables
 
-| ID | Title | Labels | Priority |
-|----|-------|--------|----------|
-| P2-01 | Implement WebSocket server (FastAPI + asyncio) | type:feature, area:backend | p0 |
-| P2-02 | Adapt existing event system to broadcast over WebSocket | type:feature, area:backend | p0 |
-| P2-03 | Stream per-file and batch processing progress to clients | type:feature, area:backend | p1 |
-| P2-04 | Add heartbeat and automatic client reconnect mechanism | type:feature, area:backend | p1 |
-| P2-05 | Write WebSocket integration tests | type:test, area:backend | p1 |
+| ID | Title | Labels | Priority | Status |
+|----|-------|--------|----------|--------|
+| P2-01 | Implement WebSocket server (FastAPI + asyncio) | type:feature, area:backend | p0 | ✅ done (b3d40f4) |
+| P2-02 | Adapt existing event system to broadcast over WebSocket | type:feature, area:backend | p0 | ✅ done (b3d40f4) |
+| P2-03 | Stream per-file and batch processing progress to clients | type:feature, area:backend | p1 | ✅ done (4df4176) |
+| P2-04 | Add heartbeat and automatic client reconnect mechanism | type:feature, area:backend | p1 | ✅ done (3fa5df7) |
+| P2-05 | Write WebSocket integration tests | type:test, area:backend | p1 | ✅ done (34a7fab) |
 
 ### Acceptance criteria
 - Clients receive `processing_started`, `progress`, `processing_done`, and `error` events.
 - Reconnect succeeds within 5 s after connection loss.
 - No message loss during batch processing of ≥ 100 images.
 - Queue worker concurrency defaults to 1 (RAM-aware), and is configurable.
+
+### Implementation notes
+- `src/api/websocket/` package: `schemas.py`, `manager.py`, `router.py`
+- `ConnectionManager`: per-project connection registry with `asyncio.Lock`, broadcasts JSON
+- WS endpoint: `GET /api/v1/projects/{project_id}/ws?token=<JWT>`
+- Auth: JWT via `?token=` query param (browser WS API has no custom header support)
+- Heartbeat: server sends `ping` every `WS_HEARTBEAT_INTERVAL` seconds (default 30s);
+  closes on no pong within `WS_HEARTBEAT_TIMEOUT` seconds (default 10s)
+- `EventBroadcastService` (`src/api/services/events.py`): asyncio polling wrapper around
+  `bid/events/EventManager`, broadcasts `scan_update` on fingerprint change
+- `ProcessingService` WS hooks: `state_change`, `progress`, `error` per photo task;
+  `queue_metrics` broadcast every 5s to all connected clients
+- `ServerClosingMessage` broadcast to all clients on app shutdown
+- 35 integration tests covering all WS message types, auth, lifecycle, and 100-photo no-loss
 
 ---
 
