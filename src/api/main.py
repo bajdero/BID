@@ -136,14 +136,11 @@ async def lifespan(app: FastAPI):
     yield  # ← application runs here
 
     logger.info("[API] Shutting down — stopping services.")
-    # Notify all connected WebSocket clients before closing
+    # Notify all connected WebSocket clients before closing.
+    # ws_manager is already in scope from the startup section of this lifespan.
     try:
         from src.api.websocket.schemas import ServerClosingMessage
-        ws_manager = get_manager()
-        import asyncio
-        asyncio.create_task(
-            ws_manager.broadcast_all(ServerClosingMessage().model_dump())
-        )
+        await ws_manager.broadcast_all(ServerClosingMessage().model_dump())
     except Exception:
         pass  # WS manager may not be available in all test scenarios
     get_event_service().stop_all()
@@ -169,8 +166,8 @@ def create_app() -> FastAPI:
             "| Phase | Milestone | Status |\n"
             "|-------|-----------|--------|\n"
             "| 1 | Backend API Extraction | **Done** |\n"
-            "| 2 | WebSocket real-time layer | **In progress** |\n"
-            "| 3 | React/TypeScript frontend | Planned |\n"
+            "| 2 | WebSocket real-time layer | **Done** |\n"
+            "| 3 | React/TypeScript frontend | **In progress** |\n"
             "| 4 | Event system | Planned |\n\n"
             "## Auth\n"
             "Protected endpoints require `Authorization: Bearer <access_token>`.  "

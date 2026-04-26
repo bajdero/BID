@@ -127,8 +127,8 @@ async def websocket_project(
     manager = get_manager()
     await manager.connect(websocket, project_id)
 
-    # Per-connection subscription state:  None = subscribe to all folders
-    subscribed_folders: set[str] | None = None
+    # Per-connection subscription state is tracked inside ConnectionManager.
+    # Call manager.update_subscription() to change the filter for this socket.
 
     # Heartbeat tracking: asyncio.Event set by the receive loop on pong receipt
     _pong_received = asyncio.Event()
@@ -184,15 +184,12 @@ async def websocket_project(
                 continue
 
             if msg.type == "subscribe":
-                if msg.folders:
-                    subscribed_folders = set(msg.folders)
-                    logger.debug(
-                        f"[WS] Subscribe filter updated — "
-                        f"project={project_id!r} folders={subscribed_folders!r}"
-                    )
-                else:
-                    # Empty list means subscribe to all
-                    subscribed_folders = None
+                folders = set(msg.folders) if msg.folders else None
+                manager.update_subscription(websocket, folders)
+                logger.debug(
+                    f"[WS] Subscribe filter updated — "
+                    f"project={project_id!r} folders={folders!r}"
+                )
 
             elif msg.type == "pong":
                 _pong_received.set()

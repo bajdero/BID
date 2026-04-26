@@ -3,9 +3,8 @@ tests/test_websocket.py
 WebSocket integration tests for the BID real-time layer (Phase 2 / P2-05).
 
 Test design:
-- Uses httpx-ws for async WebSocket test connections via HTTPX's TestClient
-  integration with Starlette's WebSocket test support.
-- FastAPI TestClient with contextlib.contextmanager usage for WS testing.
+- Uses FastAPI's built-in TestClient.websocket_connect() for synchronous
+  WebSocket test connections against the ASGI app.
 - All image processing is mocked to keep tests fast and I/O-free.
 - Each test class is independent; fixtures isolate state.
 
@@ -496,6 +495,7 @@ class TestProcessingServiceWSHooks:
                 existing_exports={},
                 event_folder=None,
                 created_date="2026-01-01",
+                old_state="new",
             )
 
         svc.shutdown()
@@ -567,6 +567,7 @@ class TestProcessingServiceWSHooks:
                 existing_exports={},
                 event_folder=None,
                 created_date="2026-01-01",
+                old_state="error",
             )
 
         svc.shutdown()

@@ -116,7 +116,7 @@ class EventBroadcastService:
                 # Run the blocking EventManager.load_all() in the thread pool
                 loop = asyncio.get_event_loop()
                 try:
-                    await loop.run_in_executor(None, manager.load_all)
+                    schedules = await loop.run_in_executor(None, manager.load_all)
                 except Exception as exc:
                     logger.warning(
                         f"[EVENTS] load_all failed for {project_id!r}: {exc}"
@@ -133,9 +133,8 @@ class EventBroadcastService:
                     f"project={project_id!r}"
                 )
 
-                # Count new/updated items from the loaded schedules
+                # Derive counts from the already-loaded schedules (no second call)
                 try:
-                    schedules = manager.load_all()
                     updated_folders: list[str] = [
                         s.title for s in schedules if s.title
                     ]

@@ -198,6 +198,7 @@ class ProcessingService:
                 skipped += 1
                 continue
 
+            old_state = record.state  # capture actual state before the transition
             set_state(db, record, "processing")
             db.flush()
             record_id: int = record.id  # capture before commit frees the session
@@ -215,6 +216,7 @@ class ProcessingService:
                     existing_exports=record.exported.copy(),
                     event_folder=record.event_folder,
                     created_date=record.created_date,
+                    old_state=old_state,
                 )
             )
             queued += 1
@@ -370,6 +372,7 @@ class ProcessingService:
         existing_exports: dict[str, str],
         event_folder: str | None,
         created_date: str,
+        old_state: str,
     ) -> None:
         """
         Semaphore-gated coroutine that runs process_photo_task() in a thread
@@ -386,7 +389,7 @@ class ProcessingService:
             }
             loop = asyncio.get_event_loop()
 
-            # Broadcast state_change: new → processing
+            # Broadcast state_change: <old_state> → processing
             if self._ws_manager is not None:
                 from src.api.websocket.schemas import StateChangeMessage
                 await self._ws_manager.broadcast_to_project(
@@ -395,7 +398,7 @@ class ProcessingService:
                         project_id=project_id,
                         folder=folder,
                         photo=photo,
-                        old_state="new",
+                        old_state=old_state,
                         new_state="processing",
                     ).model_dump(),
                 )

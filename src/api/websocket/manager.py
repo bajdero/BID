@@ -68,6 +68,8 @@ class ConnectionManager:
     def __init__(self) -> None:
         # project_id → set of live WebSocket connections
         self._connections: dict[str, set[WebSocket]] = {}
+        # websocket → subscribed folder names (None = all folders)
+        self._subscriptions: dict[WebSocket, set[str] | None] = {}
         self._lock = asyncio.Lock()
 
     # ------------------------------------------------------------------
@@ -79,6 +81,7 @@ class ConnectionManager:
         await websocket.accept()
         async with self._lock:
             self._connections.setdefault(project_id, set()).add(websocket)
+            self._subscriptions[websocket] = None  # default: all folders
         logger.info(
             f"[WS] Client connected — project={project_id!r}  "
             f"total={self._count()}"
@@ -91,13 +94,22 @@ class ConnectionManager:
             project_sockets.discard(websocket)
             if not project_sockets:
                 self._connections.pop(project_id, None)
+        self._subscriptions.pop(websocket, None)
         logger.info(
             f"[WS] Client disconnected — project={project_id!r}  "
             f"remaining={self._count()}"
         )
 
-    # ------------------------------------------------------------------
-    # Broadcast helpers
+    def update_subscription(
+        self, websocket: WebSocket, folders: set[str] | None
+    ) -> None:
+        """Update the folder-subscription filter for *websocket*.
+
+        *folders* is a non-empty set of folder names the client wants to
+        receive updates for.  Pass ``None`` to subscribe to all folders
+        (the default on first connect and when an empty list is received).
+        """
+        self._subscriptions[websocket] = folders
     # ------------------------------------------------------------------
 
     async def broadcast_to_project(
@@ -117,6 +129,16 @@ class ConnectionManager:
         for ws in sockets:
             try:
                 import json
+                # Respect per-socket folder subscription filter.
+                # If the socket is subscribed to specific folders and the payload
+                # carries a "folder" key that is not in the subscription, skip it.
+                sub = self._subscriptions.get(ws)
+                if (
+                    sub is not None
+                    and "folder" in payload
+                    and payload["folder"] not in sub
+                ):
+                    continue
                 await ws.send_text(json.dumps(payload))
             except Exception:
                 dead.append(ws)
