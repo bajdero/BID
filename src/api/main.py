@@ -136,6 +136,16 @@ async def lifespan(app: FastAPI):
     yield  # ← application runs here
 
     logger.info("[API] Shutting down — stopping services.")
+    # Notify all connected WebSocket clients before closing
+    try:
+        from src.api.websocket.schemas import ServerClosingMessage
+        ws_manager = get_manager()
+        import asyncio
+        asyncio.create_task(
+            ws_manager.broadcast_all(ServerClosingMessage().model_dump())
+        )
+    except Exception:
+        pass  # WS manager may not be available in all test scenarios
     get_event_service().stop_all()
     get_service().shutdown()
 
