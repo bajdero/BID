@@ -3,6 +3,37 @@
 Narzędzie do automatycznego skalowania zdjęć, nakładania watermarku i eksportu do folderów delivery.  
 Tool for automatic image scaling, watermark overlay, and delivery folder export.
 
+> **BID 2.0.0-rc1** — Web PoC available. See [Quick start (Docker)](#quick-start-docker) below.
+
+---
+
+## Quick start (Docker)
+
+> **Requires:** Docker Engine ≥ 24 and Docker Compose v2.
+
+```bash
+# 1. Clone the repository
+git clone https://github.com/bajdero/BID.git
+cd BID
+
+# 2. Copy and configure environment variables
+cp .env.example .env
+# Edit .env — at minimum set SECRET_KEY to a long random string
+
+# 3. Build and start all services
+docker compose up --build -d
+
+# 4. Open the application
+#    Web UI:       http://localhost/
+#    API docs:     http://localhost/docs
+#    FileBrowser:  http://localhost/files
+```
+
+> Default admin credentials are created on first run. See `src/api/` for the seeding logic.
+
+To stop: `docker compose down`  
+To view logs: `docker compose logs -f`
+
 ---
 
 ## Wymagania systemowe / System Requirements
