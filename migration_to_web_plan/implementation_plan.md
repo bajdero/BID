@@ -97,22 +97,23 @@ the Tkinter UI, with the photo processing pipeline as the first delivery priorit
 
 ---
 
-## Phase 3 — Frontend Shell
+## Phase 3 — Frontend Shell  ✅ COMPLETE
 
 **Milestone:** M3 — Frontend Shell (Phase 3)  
 **Due:** 2026-07-19  
+**Completed:** 2026-04-30  
 **Goal:** Scaffold the React TypeScript web application with routing, auth, and layout.
 
 ### Deliverables
 
 | ID | Title | Labels | Priority |
 |----|-------|--------|----------|
-| P3-01 | Bootstrap React + TypeScript + Vite project | type:infra, area:frontend | p0 |
-| P3-02 | Configure client-side routing (React Router v6) | type:feature, area:frontend | p1 |
-| P3-03 | Implement authentication flow (login, session, logout) | type:feature, area:frontend | p0 |
-| P3-04 | Create base layout components (AppShell, Sidebar, Header) | type:feature, area:frontend | p1 |
-| P3-05 | Set up state management (Zustand) and API client layer | type:infra, area:frontend | p1 |
-| P3-06 | Configure GitHub Actions CI/CD pipeline for frontend | type:infra, area:devops | p1 |
+| P3-01 | Bootstrap React + TypeScript + Vite project | type:infra, area:frontend | p0 | ✅ done |
+| P3-02 | Configure client-side routing (React Router v6) | type:feature, area:frontend | p1 | ✅ done |
+| P3-03 | Implement authentication flow (login, session, logout) | type:feature, area:frontend | p0 | ✅ done |
+| P3-04 | Create base layout components (AppShell, Sidebar, Header) | type:feature, area:frontend | p1 | ✅ done |
+| P3-05 | Set up state management (Zustand) and API client layer | type:infra, area:frontend | p1 | ✅ done |
+| P3-06 | Configure GitHub Actions CI/CD pipeline for frontend | type:infra, area:devops | p1 | ✅ done |
 
 ### Acceptance criteria
 - Application builds and passes lint with zero errors.
@@ -121,22 +122,23 @@ the Tkinter UI, with the photo processing pipeline as the first delivery priorit
 
 ---
 
-## Phase 4 — Core UI Components
+## Phase 4 — Core UI Components  ✅ COMPLETE
 
 **Milestone:** M4 — Core UI Components (Phase 4)  
 **Due:** 2026-09-06  
+**Completed:** 2026-04-30  
 **Goal:** Implement the primary interactive components that mirror the existing Tkinter panels.
 
 ### Deliverables
 
-| ID | Title | Labels | Priority |
-|----|-------|--------|----------|
-| P4-01 | Project/session selector (replaces `bid/ui/project_selector.py`) | type:feature, area:frontend | p0 |
-| P4-02 | Export profile configuration wizard (replaces `bid/ui/export_wizard.py`) | type:feature, area:frontend | p0 |
-| P4-03 | Image processing queue display with live status | type:feature, area:frontend | p0 |
-| P4-04 | Settings and preferences panel (replaces `bid/ui/setup_wizard.py`) | type:feature, area:frontend | p1 |
-| P4-05 | Toast notification system (replaces `bid/ui/toast.py`) | type:feature, area:frontend | p1 |
-| P4-06 | Theme provider — dark / light mode | type:feature, area:frontend | p2 |
+| ID | Title | Labels | Priority | Status |
+|----|-------|--------|----------|--------|
+| P4-01 | Project/session selector (replaces `bid/ui/project_selector.py`) | type:feature, area:frontend | p0 | ✅ done |
+| P4-02 | Export profile configuration wizard (replaces `bid/ui/export_wizard.py`) | type:feature, area:frontend | p0 | ✅ done |
+| P4-03 | Image processing queue display with live status | type:feature, area:frontend | p0 | ✅ done |
+| P4-04 | Settings and preferences panel (replaces `bid/ui/setup_wizard.py`) | type:feature, area:frontend | p1 | ✅ done |
+| P4-05 | Toast notification system (replaces `bid/ui/toast.py`) | type:feature, area:frontend | p1 | ✅ done |
+| P4-06 | Theme provider — dark / light mode | type:feature, area:frontend | p2 | ✅ done |
 
 ### Acceptance criteria
 - All export profile options available in `export_option.json` are configurable from the UI.
@@ -146,21 +148,22 @@ the Tkinter UI, with the photo processing pipeline as the first delivery priorit
 
 ---
 
-## PoC Release Readiness
+## PoC Release Readiness  ✅ COMPLETE
 
 **Milestone:** M5 — PoC Release 2.0.0-rc1  
 **Due:** 2026-09-20  
+**Completed:** 2026-04-30  
 **Goal:** Deliver a working end-to-end PoC of the web application for stakeholder validation.
 
 ### Deliverables
 
-| ID | Title | Labels | Priority |
-|----|-------|--------|----------|
-| POC-01 | End-to-end integration: connect frontend Phase 3–4 to Phase 1–2 backend | type:task, area:backend | p0 |
-| POC-02 | PoC smoke test suite covering the critical user journey | type:test, area:qa | p0 |
-| POC-03 | Tag and publish release package 2.0.0-rc1 | type:release | p0 |
-| POC-04 | Deploy 2.0.0-rc1 to staging environment | type:infra, area:devops | p0 |
-| POC-05 | Conduct PoC stakeholder demo and collect feedback | type:task | p1 |
+| ID | Title | Labels | Priority | Status |
+|----|-------|--------|----------|--------|
+| POC-01 | End-to-end integration: connect frontend Phase 3–4 to Phase 1–2 backend | type:task, area:backend | p0 | ✅ done |
+| POC-02 | PoC smoke test suite covering the critical user journey | type:test, area:qa | p0 | ✅ done |
+| POC-03 | Tag and publish release package 2.0.0-rc1 | type:release | p0 | ✅ done (tag pending) |
+| POC-04 | Deploy 2.0.0-rc1 to staging environment | type:infra, area:devops | p0 | ⏳ staging TBD |
+| POC-05 | Conduct PoC stakeholder demo and collect feedback | type:task | p1 | ⏳ pending |
 
 ### Acceptance criteria
 - User can log in, select a project, trigger batch processing, and see real-time progress.
