@@ -26,7 +26,7 @@ from src.api.config import settings
 from src.api.deps import require_authenticated_user
 from src.api.errors import register_exception_handlers
 from src.api.models.database import init_db
-from src.api.routers import auth, exports, processing, projects, system, users
+from src.api.routers import auth, exports, processing, projects, sources, system, users
 from src.api.services.events import EventBroadcastService, set_event_service, get_event_service
 from src.api.services.processing import ProcessingService, set_service, get_service
 from src.api.websocket import router as ws_router
@@ -223,6 +223,11 @@ def create_app() -> FastAPI:
     )
     app.include_router(
         projects.router,
+        prefix=prefix,
+        dependencies=[Depends(require_authenticated_user)],
+    )
+    app.include_router(
+        sources.router,
         prefix=prefix,
         dependencies=[Depends(require_authenticated_user)],
     )
